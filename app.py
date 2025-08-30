@@ -1,4 +1,106 @@
-import streamlit as st
+@st.cache_data
+    def load_data(_self, url):
+        try:
+            # First check what we're actually getting
+            import requests
+            response = requests.get(url)
+            content_type = response.headers.get('content-type', '')
+            
+            if 'text/html' in content_type:
+                st.error("❌ The URL is returning HTML, not a CSV file!")
+                st.error("This usually means:")
+                st.error("1. The file doesn't exist at that location")
+                st.error("2. The repository is private")
+                st.error("3. The file path is incorrect")
+                st.info("**Solutions:**")
+                st.info("• Make sure your repository is public")
+                st.info("• Check the exact file path on GitHub")
+                st.info("• Ensure the file is actually a .csv file")
+                return None
+            
+            # Try to load as CSV
+            df = pd.read_csv(url, low_memory=False, on_bad_lines='skip', encoding='utf-8')
+            
+        except Exception as e1:
+            try:
+                st.warning(f"UTF-8 failed: {e1}. Trying latin-1...")
+                df = pd.read_csv(url, low_memory=False, on_bad_lines='skip', encoding='latin-1')
+            except Exception as e2:
+                try:
+                    st.warning(f"Latin-1 failed: {e2}. Trying with different separator...")
+                    df = pd.read_csv(url, low_memory=False, on_bad_lines='skip', sep=';')
+                except Exception as e3:
+                    st.error(f"❌ All CSV loading attempts failed!")
+                    st.error(f"Errors: {e1}, {e2}, {e3}")
+                    
+                    # Show what we actually got
+                    try:
+                        import requests
+                        response = requests.get(url)
+                        st.error("**What we received:**")
+                        st.code(response.text[:500] + "..." if len(response.text) > 500 else response.text)
+                    except:
+                        pass
+                    
+                    return None
+        
+        try:
+            st.success(f"✅ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
+            
+            # Show first few column names to verify
+            st.info(f"**Columns found:** {list(df.columns[:10])}")
+            
+            # Check if required columns exist
+            required_cols = ['orig_title', 'names', 'overview', 'genre', 'crew', 'score']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                st.error(f"❌ Missing required columns: {missing_cols}")
+                st.info("**All available columns:**")
+                st.write(list(df.columns))
+                
+                # Try to suggest column mapping
+                st.info("**Possible column mappings:**")
+                for req_col in missing_cols:
+                    similar_cols = [col for col in df.columns if req_col.lower() in col.lower() or col.lower() in req_col.lower()]
+                    if similar_cols:
+                        st.write(f"• {req_col} → maybe: {similar_cols}")
+                
+                return None
+            
+            # Preprocess
+            df['overview'] = df['overview'].fillna('No description')
+            df['genre'] = df['genre'].fillna('Unknown')
+            df['crew'] = df['crew'].fillna('Unknown')
+            df['clean_title'] = df['orig_title'].apply(_self.clean_title)
+            
+            # Create content for similarity
+            df['content'] = (df['overview'].astype(str) + ' ' +
+                           df['genre'].astype(str).str.replace('|', ' ') + ' ' +
+                           df['crew'].astype(str))
+            
+            # Weighted ratings
+            if 'vote_count' not in df.columns:
+                if 'revenue' in df.columns:
+                    df['vote_count'] = (df['revenue'].fillna(0) / 1000000 * 
+                                       df['score'].fillna(5) * 
+                                       np.random.uniform(50, 500, len(df))).astype(int).clip(lower=1)
+                else:
+                    # If no revenue column, create synthetic vote counts
+                    df['vote_count'] = (df['score'].fillna(5) * 
+                                       np.random.uniform(100, 1000, len(df))).astype(int).clip(lower=1)
+            
+            avg_rating = df['score'].mean()
+            vote_threshold = df['vote_count'].quantile(0.90)
+            df['weighted_rating'] = df.apply(
+                lambda x: (x['vote_count']/(x['vote_count']+vote_threshold) * x['score']) + 
+                         (vote_threshold/(vote_threshold+x['vote_count']) * avg_rating), axis=1)
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"❌ Error processing data: {e}")
+            return Noneimport streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -25,7 +127,35 @@ class MovieRecommender:
     @st.cache_data
     def load_data(_self, url):
         try:
-            df = pd.read_csv(url, low_memory=False)
+            # Try different CSV reading parameters to handle formatting issues
+            df = pd.read_csv(url, low_memory=False, on_bad_lines='skip', encoding='utf-8')
+            
+            # If that fails, try with different settings
+        except Exception as e1:
+            try:
+                st.warning(f"First attempt failed: {e1}. Trying alternative method...")
+                df = pd.read_csv(url, low_memory=False, on_bad_lines='skip', encoding='latin-1')
+            except Exception as e2:
+                try:
+                    st.warning(f"Second attempt failed: {e2}. Trying with error handling...")
+                    df = pd.read_csv(url, low_memory=False, on_bad_lines='skip', sep=',', quoting=1)
+                except Exception as e3:
+                    st.error(f"All attempts failed. Errors: {e1}, {e2}, {e3}")
+                    st.info("Please check if your CSV file is properly formatted")
+                    return None
+        
+        try:
+            st.info(f"Successfully loaded {len(df)} rows and {len(df.columns)} columns")
+            st.write("**Column names:**", list(df.columns))
+            
+            # Check if required columns exist
+            required_cols = ['orig_title', 'names', 'overview', 'genre', 'crew', 'score']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                st.error(f"Missing required columns: {missing_cols}")
+                st.write("**Available columns:**", list(df.columns))
+                return None
             
             # Preprocess
             df['overview'] = df['overview'].fillna('No description')
@@ -40,9 +170,14 @@ class MovieRecommender:
             
             # Weighted ratings
             if 'vote_count' not in df.columns:
-                df['vote_count'] = (df['revenue'].fillna(0) / 1000000 * 
-                                   df['score'].fillna(5) * 
-                                   np.random.uniform(50, 500, len(df))).astype(int).clip(lower=1)
+                if 'revenue' in df.columns:
+                    df['vote_count'] = (df['revenue'].fillna(0) / 1000000 * 
+                                       df['score'].fillna(5) * 
+                                       np.random.uniform(50, 500, len(df))).astype(int).clip(lower=1)
+                else:
+                    # If no revenue column, create synthetic vote counts
+                    df['vote_count'] = (df['score'].fillna(5) * 
+                                       np.random.uniform(100, 1000, len(df))).astype(int).clip(lower=1)
             
             avg_rating = df['score'].mean()
             vote_threshold = df['vote_count'].quantile(0.90)
@@ -51,8 +186,9 @@ class MovieRecommender:
                          (vote_threshold/(vote_threshold+x['vote_count']) * avg_rating), axis=1)
             
             return df
+            
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error processing data: {e}")
             return None
 
     @st.cache_data
@@ -111,14 +247,42 @@ def main():
     
     system = get_system()
     
-    # Auto-setup
-    if 'ready' not in st.session_state:
-        with st.spinner("Loading..."):
-            if system.setup():
-                st.session_state.ready = True
-                st.success(f"✅ {len(system.df):,} movies loaded!")
-            else:
-                return
+    # Add fallback file upload option
+    st.sidebar.header("📁 Data Source")
+    data_source = st.sidebar.radio("Choose data source:", ["GitHub", "Upload File"])
+    
+    if data_source == "Upload File":
+        uploaded_file = st.sidebar.file_uploader("Upload CSV file:", type=['csv'])
+        if uploaded_file:
+            if 'ready' not in st.session_state:
+                with st.spinner("Loading uploaded file..."):
+                    system.df = pd.read_csv(uploaded_file, low_memory=False, on_bad_lines='skip')
+                    if system.df is not None:
+                        # Process the uploaded data
+                        system.df['overview'] = system.df['overview'].fillna('No description')
+                        system.df['genre'] = system.df['genre'].fillna('Unknown')
+                        system.df['crew'] = system.df['crew'].fillna('Unknown')
+                        system.df['clean_title'] = system.df['orig_title'].apply(system.clean_title)
+                        system.df['content'] = (system.df['overview'].astype(str) + ' ' +
+                                               system.df['genre'].astype(str).str.replace('|', ' ') + ' ' +
+                                               system.df['crew'].astype(str))
+                        
+                        # Build similarity matrix
+                        system.cosine_sim = system.build_similarity(system.df['content'])
+                        system.indices = pd.Series(system.df.index, index=system.df['clean_title']).drop_duplicates()
+                        
+                        st.session_state.ready = True
+                        st.success(f"✅ {len(system.df):,} movies loaded from upload!")
+    else:
+        # Auto-setup from GitHub
+        if 'ready' not in st.session_state:
+            with st.spinner("Loading from GitHub..."):
+                if system.setup():
+                    st.session_state.ready = True
+                    st.success(f"✅ {len(system.df):,} movies loaded from GitHub!")
+                else:
+                    st.error("❌ Failed to load from GitHub. Try uploading your file instead.")
+                    return
 
     # Tabs
     tab1, tab2, tab3 = st.tabs(["🎬 Recommendations", "🎭 Genre", "👤 Crew"])
@@ -176,5 +340,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
