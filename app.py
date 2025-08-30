@@ -8,7 +8,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # 🔗 Replace with your GitHub raw CSV URL
-GITHUB_CSV_URL = "https://github.com/hongzai-67/Movie-Recommendation/blob/main/imdb_movies.csv"
+GITHUB_CSV_URL = "https://raw.githubusercontent.com/hongzai-67/Movie-Recommendation/main/imdb_movies.csv"
 
 class MovieRecommender:
     def __init__(self):
@@ -176,3 +176,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
