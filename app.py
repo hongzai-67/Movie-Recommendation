@@ -6,7 +6,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
 # =====================================================================
-# 推荐系统核心类（从 again.txt 复制过来，保留主要功能）
+# 推荐系统核心类（精简版，包含主要功能）
 # =====================================================================
 class IMDBContentBasedRecommendationSystem:
     def __init__(self):
@@ -17,7 +17,6 @@ class IMDBContentBasedRecommendationSystem:
         self.cosine_sim = None
         self.indices = None
         self.average_rating = None
-        self.vote_threshold = None
 
     def clean_title_text(self, text):
         if pd.isna(text):
@@ -28,7 +27,6 @@ class IMDBContentBasedRecommendationSystem:
 
     def load_imdb_data(self, file_path="imdb_movies.csv"):
         self.movies_df = pd.read_csv(file_path, low_memory=False)
-        # 简化处理
         self.movies_df['overview'] = self.movies_df['overview'].fillna('No description available')
         self.movies_df['genre'] = self.movies_df['genre'].fillna('Unknown')
         self.movies_df['crew'] = self.movies_df['crew'].fillna('Unknown')
@@ -40,7 +38,6 @@ class IMDBContentBasedRecommendationSystem:
             self.movies_df['genre'].astype(str).str.replace('|', ' ') + ' ' +
             self.movies_df['crew'].astype(str)
         )
-        # 加权评分（简单版）
         self.movies_df['vote_count'] = np.random.randint(50, 500, len(self.movies_df))
         self.average_rating = self.movies_df['score'].mean()
         self.movies_df['weighted_rating'] = (
@@ -69,22 +66,42 @@ class IMDBContentBasedRecommendationSystem:
             if possible_matches.empty:
                 return None, None
             return "matches", possible_matches.head(5)
-
         idx = self.indices[title]
         if hasattr(idx, '__iter__') and not isinstance(idx, str):
             idx = idx[0]
-
         movie_info = self.qualified_movies.loc[idx]
-
         sim_scores = list(enumerate(self.cosine_sim[idx]))
         sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
         sim_scores = sim_scores[1:n+1]
         movie_indices = [i[0] for i in sim_scores]
         similarity_values = [i[1] for i in sim_scores]
-
         movies = self.qualified_movies.iloc[movie_indices].copy()
         movies['similarity'] = similarity_values
         return movie_info, movies
+
+    def search_by_genre(self, genre, n=10):
+        matches = self.qualified_movies[self.qualified_movies['genre'].str.contains(genre, case=False, na=False)]
+        if matches.empty:
+            return None, None
+        return "matches", matches.nlargest(n, 'weighted_rating')
+
+    def search_by_crew(self, crew_name, n=10):
+        matches = self.qualified_movies[self.qualified_movies['crew'].str.contains(crew_name, case=False, na=False)]
+        if matches.empty:
+            return None, None
+        return "matches", matches.nlargest(n, 'weighted_rating')
+
+    def advanced_search(self, genre=None, crew=None, min_rating=None, max_results=10):
+        results = self.qualified_movies.copy()
+        if genre:
+            results = results[results['genre'].str.contains(genre, case=False, na=False)]
+        if crew:
+            results = results[results['crew'].str.contains(crew, case=False, na=False)]
+        if min_rating:
+            results = results[results['weighted_rating'] >= min_rating]
+        if results.empty:
+            return None, None
+        return "matches", results.nlargest(max_results, 'weighted_rating')
 
     def get_similarity_level(self, score):
         if score >= 0.87:
@@ -120,18 +137,27 @@ menu = [
 ]
 choice = st.selectbox("🎯 SEARCH OPTIONS:", menu)
 
+# --- 1️⃣ Title Search ---
 if "1️⃣" in choice:
     title = st.text_input("🎬 Enter a movie title:")
     n = st.number_input("📊 Number of recommendations", 1, 20, 10)
+
     if st.button("Search"):
         cleaned_title = system.clean_title_text(title)
         movie_info, result = system.get_content_recommendations(cleaned_title, n=n)
+
         if movie_info == "matches":
             st.write("🔍 Did you mean one of these?")
-            for i, (_, row) in enumerate(result.iterrows()):
-                st.write(f"{i+1}. {row['names']}")
-        elif movie_info is not None:
-            st.write(f"🎯 Found: {movie_info['names']}")
+            options = result['names'].tolist()
+            selected = st.radio("🎯 Select a movie:", options)
+            if st.button("Confirm Selection"):
+                selected_clean = system.clean_title_text(
+                    result[result['names'] == selected]['orig_title'].values[0]
+                )
+                movie_info, result = system.get_content_recommendations(selected_clean, n=n)
+
+        if isinstance(movie_info, pd.Series):
+            st.write(f"✅ Selected: {movie_info['names']}")
             st.write(f"📅 Year: {movie_info['date_x']}")
             st.write(f"🎭 Genre: {movie_info['genre']}")
             st.write(f"⭐ Score: {movie_info['score']} → Weighted: {movie_info['weighted_rating']:.2f}")
@@ -149,6 +175,47 @@ if "1️⃣" in choice:
                 st.write(f"⭐ Rating: {rec['weighted_rating']:.2f}")
                 st.write(f"🎭 Genre: {rec['genre']}")
                 st.write("")
-        else:
-            st.error("❌ Movie not found!")
 
+# --- 2️⃣ Genre Search ---
+elif "2️⃣" in choice:
+    genre = st.text_input("🎭 Enter a genre:")
+    n = st.number_input("📊 Number of results", 1, 20, 10)
+    if st.button("Search"):
+        status, result = system.search_by_genre(genre, n=n)
+        if result is not None:
+            selected = st.radio("🎯 Select a movie from genre list:", result['names'].tolist())
+            if st.button("Confirm Selection"):
+                st.write(f"✅ Selected: {selected}")
+                st.dataframe(result[result['names'] == selected])
+
+# --- 3️⃣ Crew Search ---
+elif "3️⃣" in choice:
+    crew = st.text_input("👥 Enter crew member (actor/director):")
+    n = st.number_input("📊 Number of results", 1, 20, 10)
+    if st.button("Search"):
+        status, result = system.search_by_crew(crew, n=n)
+        if result is not None:
+            selected = st.radio("🎯 Select a movie from crew list:", result['names'].tolist())
+            if st.button("Confirm Selection"):
+                st.write(f"✅ Selected: {selected}")
+                st.dataframe(result[result['names'] == selected])
+
+# --- 4️⃣ Advanced Search ---
+elif "4️⃣" in choice:
+    st.write("🔍 Advanced Search - Enter criteria:")
+    genre = st.text_input("🎭 Genre:")
+    crew = st.text_input("👥 Crew member:")
+    min_rating = st.number_input("⭐ Minimum rating", 0.0, 10.0, 0.0)
+    n = st.number_input("📊 Max results", 1, 20, 10)
+    if st.button("Search"):
+        status, result = system.advanced_search(
+            genre=genre or None,
+            crew=crew or None,
+            min_rating=min_rating if min_rating > 0 else None,
+            max_results=n
+        )
+        if result is not None:
+            selected = st.radio("🎯 Select a movie from advanced search results:", result['names'].tolist())
+            if st.button("Confirm Selection"):
+                st.write(f"✅ Selected: {selected}")
+                st.dataframe(result[result['names'] == selected])
