@@ -17,8 +17,8 @@ class IMDBContentBasedRecommendationSystem:
         self.tfidf_matrix = None
         self.cosine_sim = None
         self.indices = None
-        self.C = 0
-        self.m = 0
+        self.average_rating = 0
+        self.vote_threshold = 0
 
     def clean_title_text(self, text):
         if pd.isna(text):
@@ -38,8 +38,6 @@ class IMDBContentBasedRecommendationSystem:
             self.movies_df['keywords'] = ""
         if 'tagline' not in self.movies_df.columns:
             self.movies_df['tagline'] = ""
-        if 'vote_count' not in self.movies_df.columns:
-            self.movies_df['vote_count'] = np.random.randint(50, 1000, size=len(self.movies_df))  # 如果缺少vote_count就随机填充
 
         # 保留原始标题
         self.movies_df['original_title'] = self.movies_df['orig_title'].copy()
@@ -48,30 +46,50 @@ class IMDBContentBasedRecommendationSystem:
         # 去重
         self.movies_df = self.movies_df.drop_duplicates(subset=['orig_title']).reset_index(drop=True)
 
-        # 加强特征：title + overview + genre + crew + keywords + tagline
+        # FIXED: Use the same enhanced content as Colab (overview + genre + crew)
         self.movies_df['enhanced_content'] = (
-            self.movies_df['names'].astype(str) + ' ' +
             self.movies_df['overview'].astype(str) + ' ' +
             self.movies_df['genre'].astype(str).str.replace('|', ' ') + ' ' +
-            self.movies_df['crew'].astype(str) + ' ' +
-            self.movies_df['keywords'].astype(str) + ' ' +
-            self.movies_df['tagline'].astype(str)
+            self.movies_df['crew'].astype(str)
         )
 
-        # Weighted Rating
-        self.C = self.movies_df['score'].mean()
-        self.m = self.movies_df['vote_count'].quantile(0.70)  # 取前70%分位
-        self.movies_df['weighted'] = self.movies_df.apply(
-            lambda x: (x['vote_count']/(x['vote_count']+self.m) * x['score']) +
-                      (self.m/(self.m+x['vote_count']) * self.C),
-            axis=1
-        )
+        # FIXED: Create synthetic vote_count like in Colab
+        if 'vote_count' not in self.movies_df.columns:
+            self.movies_df['vote_count'] = (
+                (self.movies_df['revenue'].fillna(0) / 1_000_000) *
+                (self.movies_df['score'].fillna(5) / 2) *
+                np.random.uniform(50, 500, len(self.movies_df))
+            ).astype(int)
+            self.movies_df['vote_count'] = self.movies_df['vote_count'].clip(lower=1)
 
+        # FIXED: Calculate weighted rating using IMDb formula like in Colab
+        self.average_rating = self.movies_df['score'].mean()
+        self.vote_threshold = self.movies_df['vote_count'].quantile(0.90)
+        
+        def weighted_rating(x, m=self.vote_threshold, C=self.average_rating):
+            v = x['vote_count']
+            R = x['score']
+            return (v/(v+m) * R) + (m/(m+v) * C)
+        
+        self.movies_df['weighted_rating'] = self.movies_df.apply(weighted_rating, axis=1)
+        
+        # Use weighted_rating instead of weighted
+        self.movies_df['weighted'] = self.movies_df['weighted_rating']
+        
         self.qualified_movies = self.movies_df.copy()
 
     def build_content_based_system(self):
         working_df = self.qualified_movies.copy()
-        self.tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=10000, ngram_range=(1,2))
+        
+        # FIXED: Use same TF-IDF parameters as Colab
+        self.tfidf_vectorizer = TfidfVectorizer(
+            stop_words='english',
+            max_features=10000,
+            ngram_range=(1, 2),
+            min_df=2,
+            max_df=0.8
+        )
+        
         working_df['enhanced_content'] = working_df['enhanced_content'].fillna('')
         self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(working_df['enhanced_content'])
         self.cosine_sim = linear_kernel(self.tfidf_matrix, self.tfidf_matrix)
@@ -79,13 +97,14 @@ class IMDBContentBasedRecommendationSystem:
         self.qualified_movies = working_df
 
     def get_similarity_level(self, score):
-        if score >= 0.95:
+        # FIXED: Use same thresholds as Colab
+        if score >= 0.87:
             return "🔥 VERY HIGH"
-        elif score >= 0.85:
+        elif score >= 0.86:
             return "🟢 HIGH"
-        elif score >= 0.75:
+        elif score >= 0.85:
             return "🟡 MODERATE"
-        elif score >= 0.65:
+        elif score >= 0.84:
             return "🟠 LOW"
         else:
             return "🔴 VERY LOW"
@@ -102,17 +121,112 @@ class IMDBContentBasedRecommendationSystem:
 
         # 精确匹配
         idx = self.indices[title]
+        
+        # FIXED: Handle multiple matches properly
+        if hasattr(idx, '__iter__') and not isinstance(idx, str):
+            idx = idx.iloc[0] if hasattr(idx, 'iloc') else idx[0]
+            
         sim_scores = list(enumerate(self.cosine_sim[idx]))
 
-        # 按相似度排序
-        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
-        movie_indices = [i[0] for i in sim_scores]
-        movies = self.qualified_movies.iloc[movie_indices].copy()
-        movies['similarity'] = [i[1] for i in sim_scores]
+        # FIXED: Apply the same similarity scaling as Colab (0.8-1.0 range)
+        sim_values = [score for _, score in sim_scores]
+        min_sim = min(sim_values) if sim_values else 0
+        max_sim = max(sim_values) if sim_values else 1
 
-        # 按 similarity + weighted 排序
-        movies = movies.sort_values(by=["similarity", "weighted"], ascending=False)
+        if max_sim == min_sim:
+            scaled_sim_scores = [(i, 0.8) for i, _ in sim_scores]
+        else:
+            scaled_sim_scores = [
+                (i, 0.8 + (score - min_sim) * (1.0 - 0.8) / (max_sim - min_sim))
+                for i, score in sim_scores
+            ]
+
+        # 按相似度排序 (highest first)
+        scaled_sim_scores = sorted(scaled_sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
+        
+        movie_indices = [i[0] for i in scaled_sim_scores]
+        similarity_values = [i[1] for i in scaled_sim_scores]
+        
+        movies = self.qualified_movies.iloc[movie_indices].copy()
+        movies['similarity'] = similarity_values
+
+        # FIXED: Keep similarity-based order (don't re-sort by weighted rating)
         return "ok", self.qualified_movies.loc[idx], movies
+
+    # FIXED: Add missing search functions from Colab
+    def search_by_genre(self, genre, n=10, show_details=True):
+        """Search movies by genre and return top-rated matches"""
+        try:
+            genre_matches = self.qualified_movies[
+                self.qualified_movies['genre'].str.contains(genre, case=False, na=False)
+            ]
+
+            if genre_matches.empty:
+                return f"❌ No movies found with genre '{genre}'"
+
+            # Sort by weighted rating (highest first)
+            genre_matches = genre_matches.nlargest(n, 'weighted_rating')
+            return genre_matches[['names', 'weighted_rating', 'genre', 'overview']].head(n)
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def search_by_crew(self, crew_name, n=10, show_details=True):
+        """Search movies by crew member"""
+        try:
+            crew_matches = self.qualified_movies[
+                self.qualified_movies['crew'].str.contains(crew_name, case=False, na=False)
+            ]
+
+            if crew_matches.empty:
+                return f"❌ No movies found with crew member '{crew_name}'"
+
+            crew_matches = crew_matches.nlargest(n, 'weighted_rating')
+            return crew_matches[['names', 'weighted_rating', 'genre', 'crew']].head(n)
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def advanced_search(self, genre=None, crew=None, min_rating=None, max_results=10):
+        """Advanced search combining multiple criteria"""
+        try:
+            results = self.qualified_movies.copy()
+
+            if genre:
+                results = results[results['genre'].str.contains(genre, case=False, na=False)]
+            if crew:
+                results = results[results['crew'].str.contains(crew, case=False, na=False)]
+            if min_rating:
+                results = results[results['weighted_rating'] >= min_rating]
+
+            if results.empty:
+                return "❌ No movies match your criteria"
+
+            results = results.nlargest(max_results, 'weighted_rating')
+            return results[['names', 'weighted_rating', 'genre', 'crew']].head(max_results)
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def get_genre_list(self, top_n=20):
+        """Get list of available genres"""
+        all_genres = []
+        for genres in self.qualified_movies['genre'].dropna():
+            all_genres.extend(str(genres).split('|'))
+        genre_counts = pd.Series(all_genres).value_counts().head(top_n)
+        return genre_counts.index.tolist()
+
+    def get_popular_crew(self, top_n=20):
+        """Get list of popular crew members"""
+        all_crew = []
+        for crew in self.qualified_movies['crew'].dropna():
+            crew_members = re.split(r'[,|;]', str(crew))
+            for member in crew_members:
+                member = member.strip()
+                if len(member) > 2:
+                    all_crew.append(member)
+        crew_counts = pd.Series(all_crew).value_counts().head(top_n)
+        return crew_counts.index.tolist()
 
 
 # ====================================================
@@ -180,7 +294,7 @@ def main():
             output.append(f"🎯 Found: {movie_info['names']}")
             output.append(f"📅 Year: {movie_info.get('date_x','Unknown')}")
             output.append(f"🎭 Genre: {movie_info['genre']}")
-            output.append(f"⭐ Score: {movie_info['score']:.2f} → Weighted: {movie_info['weighted']:.2f}")
+            output.append(f"⭐ Score: {movie_info['score']:.2f} → Weighted: {movie_info['weighted_rating']:.2f}")
             output.append(f"📝 Overview: {str(movie_info['overview'])[:150]}...\n")
             output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS (SORTED BY HIGHEST SIMILARITY):")
             output.append("-"*70)
@@ -193,10 +307,91 @@ def main():
                 else:
                     output.append(f"   {i+1:2d}. {rec['names'][:40]}")
                 output.append(f"    🎯 Similarity: {rec['similarity']:.4f} ({similarity_percent:.1f}%) - {level}")
-                output.append(f"    ⭐ Rating: {rec['score']:.2f} → Weighted: {rec['weighted']:.2f}")
+                output.append(f"    ⭐ Rating: {rec['weighted_rating']:.2f}")
                 output.append(f"    🎭 Genre: {rec['genre']}\n")
 
             st.code("\n".join(output), language="text")
+
+    # ----------------- Search by Genre -----------------
+    elif option.startswith("2️⃣"):
+        genre = st.text_input("🎭 Enter a genre:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        
+        if st.button("Search by Genre"):
+            if genre:
+                results = recommender.search_by_genre(genre, n=n_results, show_details=False)
+                if isinstance(results, pd.DataFrame):
+                    st.markdown(f"### 🎭 Top {len(results)} movies in '{genre}' genre:")
+                    for i, (_, movie) in enumerate(results.iterrows()):
+                        st.write(f"**{i+1}. {movie['names']}**")
+                        st.write(f"⭐ Rating: {movie['weighted_rating']:.2f}")
+                        st.write(f"🎭 Genre: {movie['genre']}")
+                        st.write("---")
+                else:
+                    st.error(results)
+
+    # ----------------- Search by Crew -----------------
+    elif option.startswith("3️⃣"):
+        crew = st.text_input("👥 Enter crew member name:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        
+        if st.button("Search by Crew"):
+            if crew:
+                results = recommender.search_by_crew(crew, n=n_results, show_details=False)
+                if isinstance(results, pd.DataFrame):
+                    st.markdown(f"### 👥 Top {len(results)} movies with '{crew}':")
+                    for i, (_, movie) in enumerate(results.iterrows()):
+                        st.write(f"**{i+1}. {movie['names']}**")
+                        st.write(f"⭐ Rating: {movie['weighted_rating']:.2f}")
+                        st.write(f"🎭 Genre: {movie['genre']}")
+                        st.write("---")
+                else:
+                    st.error(results)
+
+    # ----------------- Advanced Search -----------------
+    elif option.startswith("4️⃣"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            genre = st.text_input("🎭 Genre (optional):")
+        with col2:
+            crew = st.text_input("👥 Crew member (optional):")
+        with col3:
+            min_rating = st.number_input("⭐ Min rating (optional):", min_value=0.0, max_value=10.0, step=0.1)
+        
+        n_results = st.slider("📊 Max results", 1, 20, 10)
+        
+        if st.button("Advanced Search"):
+            results = recommender.advanced_search(
+                genre=genre if genre else None,
+                crew=crew if crew else None,
+                min_rating=min_rating if min_rating > 0 else None,
+                max_results=n_results
+            )
+            if isinstance(results, pd.DataFrame):
+                st.markdown(f"### 🔍 Search Results ({len(results)} movies):")
+                for i, (_, movie) in enumerate(results.iterrows()):
+                    st.write(f"**{i+1}. {movie['names']}**")
+                    st.write(f"⭐ Rating: {movie['weighted_rating']:.2f}")
+                    st.write(f"🎭 Genre: {movie['genre']}")
+                    if crew:
+                        st.write(f"👥 Crew: {movie['crew'][:100]}...")
+                    st.write("---")
+            else:
+                st.error(results)
+
+    # ----------------- Browse Genres -----------------
+    elif option.startswith("5️⃣"):
+        st.markdown("### 🎭 Available Genres:")
+        genres = recommender.get_genre_list()
+        for i, genre in enumerate(genres):
+            st.write(f"{i+1}. {genre}")
+
+    # ----------------- Browse Crew -----------------
+    elif option.startswith("6️⃣"):
+        st.markdown("### 👥 Popular Crew Members:")
+        crew_list = recommender.get_popular_crew()
+        for i, person in enumerate(crew_list):
+            st.write(f"{i+1}. {person}")
 
 
 if __name__ == "__main__":
