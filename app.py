@@ -32,12 +32,18 @@ class IMDBContentBasedRecommendationSystem:
         self.movies_df['crew'] = self.movies_df['crew'].fillna('Unknown')
         self.movies_df['original_title'] = self.movies_df['orig_title'].copy()
         self.movies_df['orig_title'] = self.movies_df['orig_title'].apply(self.clean_title_text)
+
+        # 去重
         self.movies_df = self.movies_df.drop_duplicates(subset=['orig_title']).reset_index(drop=True)
+
+        # 加强特征：title + overview + genre + crew
         self.movies_df['enhanced_content'] = (
+            self.movies_df['names'].astype(str) + ' ' +
             self.movies_df['overview'].astype(str) + ' ' +
             self.movies_df['genre'].astype(str).str.replace('|', ' ') + ' ' +
             self.movies_df['crew'].astype(str)
         )
+
         self.qualified_movies = self.movies_df.copy()
 
     def build_content_based_system(self):
@@ -74,10 +80,22 @@ class IMDBContentBasedRecommendationSystem:
         # 精确匹配
         idx = self.indices[title]
         sim_scores = list(enumerate(self.cosine_sim[idx]))
+
+        # 按相似度排序
         sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
         movie_indices = [i[0] for i in sim_scores]
         movies = self.qualified_movies.iloc[movie_indices].copy()
         movies['similarity'] = [i[1] for i in sim_scores]
+
+        # 加权 (相似度 + 评分)
+        max_score = self.qualified_movies['score'].max()
+        movies['weighted_score'] = (
+            movies['similarity'] * 0.7 +
+            (movies['score'] / max_score) * 0.3
+        )
+
+        # 最终按 weighted_score 排序
+        movies = movies.sort_values(by="weighted_score", ascending=False)
         return "ok", self.qualified_movies.loc[idx], movies
 
 
@@ -146,9 +164,9 @@ def main():
             output.append(f"🎯 Found: {movie_info['names']}")
             output.append(f"📅 Year: {movie_info.get('date_x','Unknown')}")
             output.append(f"🎭 Genre: {movie_info['genre']}")
-            output.append(f"⭐ Score: {movie_info['score']}")
-            output.append(f"📝 Overview: {str(movie_info['overview'])[:100]}...\n")
-            output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS (SORTED BY HIGHEST SIMILARITY):")
+            output.append(f"⭐ Score: {movie_info['score']:.2f}")
+            output.append(f"📝 Overview: {str(movie_info['overview'])[:120]}...\n")
+            output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS (SORTED BY HIGHEST WEIGHTED SCORE):")
             output.append("-"*70)
 
             for i, (_, rec) in enumerate(recs.iterrows()):
@@ -159,7 +177,7 @@ def main():
                 else:
                     output.append(f"   {i+1:2d}. {rec['names'][:40]}")
                 output.append(f"    🎯 Similarity: {rec['similarity']:.4f} ({similarity_percent:.1f}%) - {level}")
-                output.append(f"    ⭐ Rating: {rec['score']:.2f}")
+                output.append(f"    ⭐ Rating: {rec['score']:.2f} → Weighted: {rec['weighted_score']*100:.2f}")
                 output.append(f"    🎭 Genre: {rec['genre']}\n")
 
             st.code("\n".join(output), language="text")
@@ -168,14 +186,18 @@ def main():
     elif option.startswith("2️⃣"):
         genre = st.text_input("🎭 Enter a genre:")
         if st.button("Search Genre"):
-            matches = recommender.qualified_movies[recommender.qualified_movies['genre'].str.contains(genre, case=False, na=False)]
+            matches = recommender.qualified_movies[
+                recommender.qualified_movies['genre'].str.contains(genre, case=False, na=False)
+            ]
             st.dataframe(matches[['names','genre','score']].head(10))
 
     # ----------------- Search by Crew -----------------
     elif option.startswith("3️⃣"):
         crew = st.text_input("👥 Enter crew member name:")
         if st.button("Search Crew"):
-            matches = recommender.qualified_movies[recommender.qualified_movies['crew'].str.contains(crew, case=False, na=False)]
+            matches = recommender.qualified_movies[
+                recommender.qualified_movies['crew'].str.contains(crew, case=False, na=False)
+            ]
             st.dataframe(matches[['names','crew','genre','score']].head(10))
 
     # ----------------- Advanced Search -----------------
