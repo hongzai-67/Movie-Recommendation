@@ -5,7 +5,9 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
-
+# ====================================================
+# Recommendation System Class
+# ====================================================
 class IMDBContentBasedRecommendationSystem:
     def __init__(self):
         self.movies_df = None
@@ -58,32 +60,47 @@ class IMDBContentBasedRecommendationSystem:
         return self.qualified_movies.loc[idx], movies
 
 
-# ============================
+# ====================================================
 # Streamlit Terminal-style UI
-# ============================
+# ====================================================
 def main():
     st.set_page_config(page_title="IMDB Recommender", layout="wide")
-    st.title("🎬 IMDB Movie Recommendation (Terminal Style)")
+    st.title("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
+    st.markdown("=================================================================")
+    st.markdown("✨ NEW FEATURES: Search by Title, Genre, Crew, or Advanced Multi-Search!")
 
     uploaded_file = st.sidebar.file_uploader("Upload IMDB dataset (CSV)", type="csv")
-    if uploaded_file:
-        recommender = IMDBContentBasedRecommendationSystem()
-        recommender.load_imdb_data(uploaded_file)
-        recommender.build_content_based_system()
+    if not uploaded_file:
+        st.warning("Please upload imdb_movies.csv in the sidebar.")
+        return
 
-        movie_title = st.text_input("Enter a movie title (English):")
-        n_recs = st.slider("Number of recommendations", 1, 20, 10)
+    # 初始化推荐器
+    recommender = IMDBContentBasedRecommendationSystem()
+    recommender.load_imdb_data(uploaded_file)
+    recommender.build_content_based_system()
 
+    # 菜单选择
+    option = st.radio("🎯 SEARCH OPTIONS:", [
+        "1️⃣ Search by Movie Title",
+        "2️⃣ Search by Genre",
+        "3️⃣ Search by Crew",
+        "4️⃣ Advanced Search",
+        "5️⃣ Browse Genres",
+        "6️⃣ Browse Crew"
+    ])
+
+    output = []
+
+    if option.startswith("1️⃣"):
+        title = st.text_input("🎬 Enter a movie title:")
+        n_recs = st.slider("📊 Number of recommendations", 1, 20, 10)
         if st.button("Get Recommendations"):
-            cleaned_title = recommender.clean_title_text(movie_title)
+            cleaned_title = recommender.clean_title_text(title)
             movie_info, recs = recommender.get_content_recommendations(cleaned_title, n=n_recs)
-
             if movie_info is None:
-                st.error(f"❌ No matches found for **{movie_title}**")
+                st.error(f"❌ No matches found for **{title}**")
             else:
-                # Build terminal-style output
-                output = []
-                output.append(f"🎬 FINDING RECOMMENDATIONS FOR: '{movie_title}'")
+                output.append(f"🎬 FINDING RECOMMENDATIONS FOR: '{title}'")
                 output.append("="*50)
                 output.append(f"🎯 Found: {movie_info['names']}")
                 output.append(f"📅 Year: {movie_info.get('date_x','Unknown')}")
@@ -92,16 +109,56 @@ def main():
                 output.append(f"📝 Overview: {str(movie_info['overview'])[:100]}...\n")
                 output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS")
                 output.append("-"*70)
-
                 for i, (_, rec) in enumerate(recs.iterrows()):
                     output.append(f"{i+1:2d}. {rec['names'][:40]}")
                     output.append(f"    🎯 Similarity: {rec['similarity']:.4f}")
                     output.append(f"    ⭐ Rating: {rec['score']:.2f}")
                     output.append(f"    🎭 Genre: {rec['genre']}\n")
 
-                st.code("\n".join(output), language="text")
-    else:
-        st.warning("Please upload imdb_movies.csv in the sidebar.")
+    elif option.startswith("2️⃣"):
+        genre = st.text_input("🎭 Enter a genre:")
+        if st.button("Search Genre"):
+            matches = recommender.qualified_movies[recommender.qualified_movies['genre'].str.contains(genre, case=False, na=False)]
+            output.append(f"✅ Found {len(matches)} movies in genre '{genre}'")
+            st.dataframe(matches[['names','genre','score']].head(10))
+
+    elif option.startswith("3️⃣"):
+        crew = st.text_input("👥 Enter crew member name:")
+        if st.button("Search Crew"):
+            matches = recommender.qualified_movies[recommender.qualified_movies['crew'].str.contains(crew, case=False, na=False)]
+            output.append(f"✅ Found {len(matches)} movies with '{crew}'")
+            st.dataframe(matches[['names','crew','genre','score']].head(10))
+
+    elif option.startswith("4️⃣"):
+        genre = st.text_input("🎭 Genre (optional):") or None
+        crew = st.text_input("👥 Crew (optional):") or None
+        min_rating = st.number_input("⭐ Minimum rating:", 0.0, 10.0, 0.0)
+        if st.button("Advanced Search"):
+            results = recommender.qualified_movies.copy()
+            if genre:
+                results = results[results['genre'].str.contains(genre, case=False, na=False)]
+            if crew:
+                results = results[results['crew'].str.contains(crew, case=False, na=False)]
+            results = results[results['score'] >= min_rating]
+            st.dataframe(results[['names','genre','crew','score']].head(10))
+
+    elif option.startswith("5️⃣"):
+        st.write("🎭 Available Genres:")
+        all_genres = []
+        for g in recommender.qualified_movies['genre'].dropna():
+            all_genres.extend(str(g).split('|'))
+        st.write(pd.Series(all_genres).value_counts().head(20))
+
+    elif option.startswith("6️⃣"):
+        st.write("👥 Popular Crew Members:")
+        all_crew = []
+        for c in recommender.qualified_movies['crew'].dropna():
+            all_crew.extend(re.split(r'[,|;]', str(c)))
+        st.write(pd.Series(all_crew).value_counts().head(20))
+
+    # 输出终端风格文字
+    if output:
+        st.code("\n".join(output), language="text")
 
 
 if __name__ == "__main__":
