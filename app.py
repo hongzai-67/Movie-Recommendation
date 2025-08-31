@@ -48,16 +48,36 @@ class IMDBContentBasedRecommendationSystem:
         self.indices = pd.Series(working_df.index, index=working_df['orig_title']).drop_duplicates()
         self.qualified_movies = working_df
 
+    def get_similarity_level(self, score):
+        if score >= 0.96:
+            return "🔥 VERY HIGH"
+        elif score >= 0.92:
+            return "🟢 HIGH"
+        elif score >= 0.88:
+            return "🟡 MODERATE"
+        elif score >= 0.84:
+            return "🟠 LOW"
+        else:
+            return "🔴 VERY LOW"
+
     def get_content_recommendations(self, title, n=10):
+        # 模糊匹配
         if title not in self.indices:
-            return None, None
+            possible_matches = self.qualified_movies[
+                self.qualified_movies['orig_title'].str.contains(title, case=False, na=False)
+            ]
+            if possible_matches.empty:
+                return None, None, None
+            return "choose", possible_matches.head(5), None
+
+        # 精确匹配
         idx = self.indices[title]
         sim_scores = list(enumerate(self.cosine_sim[idx]))
         sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
         movie_indices = [i[0] for i in sim_scores]
         movies = self.qualified_movies.iloc[movie_indices].copy()
         movies['similarity'] = [i[1] for i in sim_scores]
-        return self.qualified_movies.loc[idx], movies
+        return "ok", self.qualified_movies.loc[idx], movies
 
 
 # ====================================================
@@ -91,15 +111,26 @@ def main():
 
     output = []
 
+    # ----------------- Search by Title -----------------
     if option.startswith("1️⃣"):
         title = st.text_input("🎬 Enter a movie title:")
         n_recs = st.slider("📊 Number of recommendations", 1, 20, 10)
         if st.button("Get Recommendations"):
             cleaned_title = recommender.clean_title_text(title)
-            movie_info, recs = recommender.get_content_recommendations(cleaned_title, n=n_recs)
-            if movie_info is None:
+            status, movie_info, recs = recommender.get_content_recommendations(cleaned_title, n=n_recs)
+
+            if status is None:
                 st.error(f"❌ No matches found for **{title}**")
-            else:
+
+            elif status == "choose":
+                st.markdown("🔍 Did you mean one of these?")
+                choices = movie_info['names'].tolist()
+                choice = st.selectbox("🎯 Select a movie:", choices)
+                if st.button("Confirm Selection"):
+                    cleaned_choice = recommender.clean_title_text(choice)
+                    status, movie_info, recs = recommender.get_content_recommendations(cleaned_choice, n=n_recs)
+
+            if status == "ok":
                 output.append(f"🎬 FINDING RECOMMENDATIONS FOR: '{title}'")
                 output.append("="*50)
                 output.append(f"🎯 Found: {movie_info['names']}")
@@ -107,14 +138,21 @@ def main():
                 output.append(f"🎭 Genre: {movie_info['genre']}")
                 output.append(f"⭐ Score: {movie_info['score']}")
                 output.append(f"📝 Overview: {str(movie_info['overview'])[:100]}...\n")
-                output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS")
+                output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS (SORTED BY HIGHEST SIMILARITY):")
                 output.append("-"*70)
+
                 for i, (_, rec) in enumerate(recs.iterrows()):
-                    output.append(f"{i+1:2d}. {rec['names'][:40]}")
-                    output.append(f"    🎯 Similarity: {rec['similarity']:.4f}")
+                    similarity_percent = rec['similarity'] * 100
+                    level = recommender.get_similarity_level(rec['similarity'])
+                    if i == 0:
+                        output.append(f"🏆 {i+1:2d}. {rec['names'][:40]} ⭐ TOP MATCH!")
+                    else:
+                        output.append(f"   {i+1:2d}. {rec['names'][:40]}")
+                    output.append(f"    🎯 Similarity: {rec['similarity']:.4f} ({similarity_percent:.1f}%) - {level}")
                     output.append(f"    ⭐ Rating: {rec['score']:.2f}")
                     output.append(f"    🎭 Genre: {rec['genre']}\n")
 
+    # ----------------- Search by Genre -----------------
     elif option.startswith("2️⃣"):
         genre = st.text_input("🎭 Enter a genre:")
         if st.button("Search Genre"):
@@ -122,6 +160,7 @@ def main():
             output.append(f"✅ Found {len(matches)} movies in genre '{genre}'")
             st.dataframe(matches[['names','genre','score']].head(10))
 
+    # ----------------- Search by Crew -----------------
     elif option.startswith("3️⃣"):
         crew = st.text_input("👥 Enter crew member name:")
         if st.button("Search Crew"):
@@ -129,6 +168,7 @@ def main():
             output.append(f"✅ Found {len(matches)} movies with '{crew}'")
             st.dataframe(matches[['names','crew','genre','score']].head(10))
 
+    # ----------------- Advanced Search -----------------
     elif option.startswith("4️⃣"):
         genre = st.text_input("🎭 Genre (optional):") or None
         crew = st.text_input("👥 Crew (optional):") or None
@@ -142,6 +182,7 @@ def main():
             results = results[results['score'] >= min_rating]
             st.dataframe(results[['names','genre','crew','score']].head(10))
 
+    # ----------------- Browse Genres -----------------
     elif option.startswith("5️⃣"):
         st.write("🎭 Available Genres:")
         all_genres = []
@@ -149,6 +190,7 @@ def main():
             all_genres.extend(str(g).split('|'))
         st.write(pd.Series(all_genres).value_counts().head(20))
 
+    # ----------------- Browse Crew -----------------
     elif option.startswith("6️⃣"):
         st.write("👥 Popular Crew Members:")
         all_crew = []
