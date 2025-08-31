@@ -240,9 +240,27 @@ def main():
 
     # Add reset button in sidebar
     if st.sidebar.button("🔄 Reset All Records", type="secondary"):
-        # Clear all session state
+        # Preserve uploaded file data
+        file_uploader_key = None
+        for key in st.session_state.keys():
+            if "uploader" in key.lower() or "file" in key.lower():
+                file_uploader_key = key
+                break
+        
+        preserved_data = {}
+        if file_uploader_key and file_uploader_key in st.session_state:
+            preserved_data[file_uploader_key] = st.session_state[file_uploader_key]
+        
+        # Clear all session state except file uploader
         for key in list(st.session_state.keys()):
-            del st.session_state[key]
+            if key not in preserved_data:
+                del st.session_state[key]
+        
+        # Restore preserved data
+        for key, value in preserved_data.items():
+            st.session_state[key] = value
+            
+        st.success("✅ All search records cleared! CSV file preserved.")
         st.rerun()
 
     uploaded_file = st.sidebar.file_uploader("Upload IMDB dataset (CSV)", type="csv")
