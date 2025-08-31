@@ -30,6 +30,7 @@ class IMDBContentBasedRecommendationSystem:
     def load_imdb_data(self, file_path):
         self.movies_df = pd.read_csv(file_path, low_memory=False)
 
+        # 填补缺失值
         self.movies_df['overview'] = self.movies_df['overview'].fillna('No description available')
         self.movies_df['genre'] = self.movies_df['genre'].fillna('Unknown')
         self.movies_df['crew'] = self.movies_df['crew'].fillna('Unknown')
@@ -38,17 +39,21 @@ class IMDBContentBasedRecommendationSystem:
         if 'tagline' not in self.movies_df.columns:
             self.movies_df['tagline'] = ""
 
+        # 保留原始标题
         self.movies_df['original_title'] = self.movies_df['orig_title'].copy()
         self.movies_df['orig_title'] = self.movies_df['orig_title'].apply(self.clean_title_text)
 
+        # 去重
         self.movies_df = self.movies_df.drop_duplicates(subset=['orig_title']).reset_index(drop=True)
 
+        # FIXED: Use the same enhanced content as Colab (overview + genre + crew)
         self.movies_df['enhanced_content'] = (
             self.movies_df['overview'].astype(str) + ' ' +
             self.movies_df['genre'].astype(str).str.replace('|', ' ') + ' ' +
             self.movies_df['crew'].astype(str)
         )
 
+        # FIXED: Create synthetic vote_count like in Colab
         if 'vote_count' not in self.movies_df.columns:
             self.movies_df['vote_count'] = (
                 (self.movies_df['revenue'].fillna(0) / 1_000_000) *
@@ -57,6 +62,7 @@ class IMDBContentBasedRecommendationSystem:
             ).astype(int)
             self.movies_df['vote_count'] = self.movies_df['vote_count'].clip(lower=1)
 
+        # FIXED: Calculate weighted rating using IMDb formula like in Colab
         self.average_rating = self.movies_df['score'].mean()
         self.vote_threshold = self.movies_df['vote_count'].quantile(0.90)
         
@@ -67,6 +73,7 @@ class IMDBContentBasedRecommendationSystem:
         
         self.movies_df['weighted_rating'] = self.movies_df.apply(weighted_rating, axis=1)
         
+        # Use weighted_rating instead of weighted
         self.movies_df['weighted'] = self.movies_df['weighted_rating']
         
         self.qualified_movies = self.movies_df.copy()
@@ -74,6 +81,7 @@ class IMDBContentBasedRecommendationSystem:
     def build_content_based_system(self):
         working_df = self.qualified_movies.copy()
         
+        # FIXED: Use same TF-IDF parameters as Colab
         self.tfidf_vectorizer = TfidfVectorizer(
             stop_words='english',
             max_features=10000,
@@ -102,6 +110,7 @@ class IMDBContentBasedRecommendationSystem:
             return "🔴 VERY LOW"
 
     def get_content_recommendations(self, title, n=10):
+        # 模糊匹配
         if title not in self.indices:
             possible_matches = self.qualified_movies[
                 self.qualified_movies['orig_title'].str.contains(title, case=False, na=False)
@@ -110,13 +119,16 @@ class IMDBContentBasedRecommendationSystem:
                 return None, None, None
             return "choose", possible_matches.head(5), None
 
+        # 精确匹配
         idx = self.indices[title]
         
+        # FIXED: Handle multiple matches properly
         if hasattr(idx, '__iter__') and not isinstance(idx, str):
             idx = idx.iloc[0] if hasattr(idx, 'iloc') else idx[0]
             
         sim_scores = list(enumerate(self.cosine_sim[idx]))
 
+        # FIXED: Apply the same similarity scaling as Colab (0.8-1.0 range)
         sim_values = [score for _, score in sim_scores]
         min_sim = min(sim_values) if sim_values else 0
         max_sim = max(sim_values) if sim_values else 1
@@ -129,6 +141,7 @@ class IMDBContentBasedRecommendationSystem:
                 for i, score in sim_scores
             ]
 
+        # 按相似度排序 (highest first)
         scaled_sim_scores = sorted(scaled_sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
         
         movie_indices = [i[0] for i in scaled_sim_scores]
@@ -137,8 +150,10 @@ class IMDBContentBasedRecommendationSystem:
         movies = self.qualified_movies.iloc[movie_indices].copy()
         movies['similarity'] = similarity_values
 
+        # FIXED: Keep similarity-based order (don't re-sort by weighted rating)
         return "ok", self.qualified_movies.loc[idx], movies
 
+    # FIXED: Add missing search functions from Colab
     def search_by_genre(self, genre, n=10, show_details=True):
         """Search movies by genre and return top-rated matches"""
         try:
@@ -149,6 +164,7 @@ class IMDBContentBasedRecommendationSystem:
             if genre_matches.empty:
                 return f"❌ No movies found with genre '{genre}'"
 
+            # Sort by weighted rating (highest first)
             genre_matches = genre_matches.nlargest(n, 'weighted_rating')
             return genre_matches[['names', 'weighted_rating', 'genre', 'overview']].head(n)
 
@@ -219,17 +235,27 @@ class IMDBContentBasedRecommendationSystem:
 def main():
     st.set_page_config(page_title="IMDB Recommender", layout="wide")
     st.title("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
+    st.markdown("=================================================================")
     st.markdown("✨ NEW FEATURES: Search by Title, Genre, Crew, or Advanced Multi-Search!")
+
+    # Add reset button in sidebar
+    if st.sidebar.button("🔄 Reset All Records", type="secondary"):
+        # Clear all session state
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
     uploaded_file = st.sidebar.file_uploader("Upload IMDB dataset (CSV)", type="csv")
     if not uploaded_file:
         st.warning("Please upload imdb_movies.csv in the sidebar.")
         return
 
+    # 初始化推荐器
     recommender = IMDBContentBasedRecommendationSystem()
     recommender.load_imdb_data(uploaded_file)
     recommender.build_content_based_system()
 
+    # 菜单选择
     option = st.radio("🎯 SEARCH OPTIONS:", [
         "1️⃣ Search by Movie Title",
         "2️⃣ Search by Genre",
@@ -377,4 +403,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
