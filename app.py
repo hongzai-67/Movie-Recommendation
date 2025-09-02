@@ -96,18 +96,109 @@ class IMDBContentBasedRecommendationSystem:
         self.indices = pd.Series(working_df.index, index=working_df['orig_title']).drop_duplicates()
         self.qualified_movies = working_df
 
-    def get_similarity_level(self, score):
-        # FIXED: Use same thresholds as Colab
-        if score >= 0.87:
+    def get_similarity_level(self, similarity_score):
+        """Convert similarity score to descriptive level"""
+        if similarity_score >= 0.87:
             return "🔥 VERY HIGH"
-        elif score >= 0.86:
+        elif similarity_score >= 0.86:
             return "🟢 HIGH"
-        elif score >= 0.85:
+        elif similarity_score >= 0.85:
             return "🟡 MODERATE"
-        elif score >= 0.84:
+        elif similarity_score >= 0.84:
             return "🟠 LOW"
         else:
             return "🔴 VERY LOW"
+
+    def display_centralized_results(self, results_df, search_type="Search", original_query="", n=10):
+        """
+        CENTRALIZED RESULTS DISPLAY - Shows comprehensive movie information in compact format
+        Returns formatted string for Streamlit display
+        """
+        if results_df.empty:
+            return "❌ No results found!"
+
+        # Ensure we don't exceed available results
+        display_count = min(n, len(results_df))
+        display_results = results_df.head(display_count).copy()
+
+        output = []
+        output.append("="*80)
+        output.append(f"🎬 {search_type.upper()} RESULTS FOR: '{original_query}'")
+        output.append("="*80)
+        output.append(f"📊 Showing {display_count} results:")
+        output.append("-" * 80)
+
+        for i, (idx, movie) in enumerate(display_results.iterrows()):
+            # Build the main line with rank and movie name
+            if i == 0 and search_type == "Content Recommendations":
+                main_line = f"🏆 {i+1}. {movie['names'][:45]} ⭐ TOP MATCH!"
+            else:
+                main_line = f"🎬 {i+1}. {movie['names'][:45]}"
+
+            # Build the info line with year and rating
+            info_parts = []
+
+            try:
+                if 'date_x' in movie.index:
+                    movie_year = pd.to_datetime(movie['date_x'], errors='coerce')
+                    if pd.notna(movie_year):
+                        info_parts.append(f"📅 Year: {movie_year.year}")
+                    else:
+                        info_parts.append("📅 Year: Unknown")
+                else:
+                    info_parts.append("📅 Year: N/A")
+            except:
+                info_parts.append("📅 Year: Unknown")
+
+            if 'weighted_rating' in movie.index:
+                info_parts.append(f"⭐ Rating: {movie['weighted_rating']:.2f}")
+            elif 'score' in movie.index:
+                info_parts.append(f"⭐ Score: {movie['score']:.1f}")
+
+            info_line = " ".join(info_parts)
+
+            output.append(main_line)
+            output.append(info_line)
+
+            # Only show similarity if the column exists (in content recommendations)
+            if 'similarity' in movie.index and search_type == "Content Recommendations":
+                similarity_percent = movie['similarity'] * 100
+                similarity_level = self.get_similarity_level(movie['similarity'])
+                output.append(f"🎯 Similarity: {movie['similarity']:.4f} ({similarity_percent:.1f}%) - {similarity_level}")
+
+            # Genre
+            if 'genre' in movie.index:
+                genre_display = str(movie['genre'])[:50]
+                if len(str(movie['genre'])) > 50:
+                    genre_display += "..."
+                output.append(f"🎭 Genre: {genre_display}")
+
+            # Crew
+            if 'crew' in movie.index:
+                crew_display = str(movie['crew'])[:60]
+                if len(str(movie['crew'])) > 60:
+                    crew_display += "..."
+                output.append(f"👥 Crew: {crew_display}")
+
+            if 'orig_lang' in movie.index:
+                output.append(f"🗣️ Language: {movie['orig_lang']}")
+
+            if 'country' in movie.index:
+                country_display = str(movie['country'])[:30]
+                if len(str(movie['country'])) > 30:
+                    country_display += "..."
+                output.append(f"🌍 Country: {country_display}")
+
+            if 'budget_x' in movie.index and pd.notna(movie['budget_x']) and movie['budget_x'] > 0:
+                output.append(f"💰 Budget: ${movie['budget_x']:,}")
+
+            if 'revenue' in movie.index and pd.notna(movie['revenue']) and movie['revenue'] > 0:
+                output.append(f"💵 Revenue: ${movie['revenue']:,}")
+
+            output.append("")  # Empty line between movies
+
+        output.append("="*80)
+        return "\n".join(output)
 
     def get_content_recommendations(self, title, n=10):
         # 模糊匹配
@@ -153,9 +244,8 @@ class IMDBContentBasedRecommendationSystem:
         # FIXED: Keep similarity-based order (don't re-sort by weighted rating)
         return "ok", self.qualified_movies.loc[idx], movies
 
-    # FIXED: Add missing search functions from Colab
     def search_by_genre(self, genre, n=10, show_details=True):
-        """Search movies by genre and return top-rated matches"""
+        """Search movies by genre with CENTRALIZED DISPLAY"""
         try:
             genre_matches = self.qualified_movies[
                 self.qualified_movies['genre'].str.contains(genre, case=False, na=False)
@@ -166,13 +256,17 @@ class IMDBContentBasedRecommendationSystem:
 
             # Sort by weighted rating (highest first)
             genre_matches = genre_matches.nlargest(n, 'weighted_rating')
-            return genre_matches[['names', 'weighted_rating', 'genre', 'overview']].head(n)
+            
+            if show_details:
+                return self.display_centralized_results(genre_matches, "Genre Search", genre, n)
+            else:
+                return genre_matches
 
         except Exception as e:
             return f"❌ Error: {str(e)}"
 
     def search_by_crew(self, crew_name, n=10, show_details=True):
-        """Search movies by crew member"""
+        """Search movies by crew member with CENTRALIZED DISPLAY"""
         try:
             crew_matches = self.qualified_movies[
                 self.qualified_movies['crew'].str.contains(crew_name, case=False, na=False)
@@ -182,28 +276,136 @@ class IMDBContentBasedRecommendationSystem:
                 return f"❌ No movies found with crew member '{crew_name}'"
 
             crew_matches = crew_matches.nlargest(n, 'weighted_rating')
-            return crew_matches[['names', 'weighted_rating', 'genre', 'crew']].head(n)
+            
+            if show_details:
+                return self.display_centralized_results(crew_matches, "Crew Search", crew_name, n)
+            else:
+                return crew_matches
 
         except Exception as e:
             return f"❌ Error: {str(e)}"
 
-    def advanced_search(self, genre=None, crew=None, min_rating=None, max_results=10):
-        """Advanced search combining multiple criteria"""
+    def advanced_search(self, genre=None, crew=None, min_rating=None, max_results=10, show_details=True):
+        """Advanced search with CENTRALIZED DISPLAY"""
         try:
+            # Build query description
+            query_parts = []
+            if genre:
+                query_parts.append(f"Genre: {genre}")
+            if crew:
+                query_parts.append(f"Crew: {crew}")
+            if min_rating:
+                query_parts.append(f"Rating ≥ {min_rating}")
+
+            query_description = " | ".join(query_parts) if query_parts else "All Movies"
+
+            # Start with all movies
             results = self.qualified_movies.copy()
 
+            # Apply filters
             if genre:
                 results = results[results['genre'].str.contains(genre, case=False, na=False)]
+
             if crew:
                 results = results[results['crew'].str.contains(crew, case=False, na=False)]
+
             if min_rating:
                 results = results[results['weighted_rating'] >= min_rating]
 
             if results.empty:
                 return "❌ No movies match your criteria"
 
+            # Sort by weighted rating
             results = results.nlargest(max_results, 'weighted_rating')
-            return results[['names', 'weighted_rating', 'genre', 'crew']].head(max_results)
+
+            if show_details:
+                return self.display_centralized_results(results, "Advanced Search", query_description, max_results)
+            else:
+                return results
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def get_top_movies_by_rating(self, n=20, show_details=True):
+        """Get top movies by weighted rating with centralized display"""
+        try:
+            top_movies = self.qualified_movies.nlargest(n, 'weighted_rating').copy()
+
+            if show_details:
+                return self.display_centralized_results(top_movies, "Top Rated Movies", f"Top {n} Movies", n)
+            else:
+                return top_movies
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def search_by_year(self, year, n=10, show_details=True):
+        """Search movies by release year with centralized display"""
+        try:
+            # Extract year from date
+            self.qualified_movies['year'] = pd.to_datetime(
+                self.qualified_movies['date_x'], errors='coerce'
+            ).dt.year
+
+            year_matches = self.qualified_movies[
+                self.qualified_movies['year'] == year
+            ]
+
+            if year_matches.empty:
+                return f"❌ No movies found from year {year}"
+
+            year_matches = year_matches.nlargest(n, 'weighted_rating').copy()
+
+            if show_details:
+                return self.display_centralized_results(year_matches, "Year Search", year, n)
+            else:
+                return year_matches
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def search_by_country(self, country, n=10, show_details=True):
+        """Search movies by country with centralized display"""
+        try:
+            if 'country' not in self.qualified_movies.columns:
+                return "❌ Country information not available in dataset"
+
+            country_matches = self.qualified_movies[
+                self.qualified_movies['country'].str.contains(country, case=False, na=False)
+            ]
+
+            if country_matches.empty:
+                return f"❌ No movies found from country '{country}'"
+
+            country_matches = country_matches.nlargest(n, 'weighted_rating').copy()
+
+            if show_details:
+                return self.display_centralized_results(country_matches, "Country Search", country, n)
+            else:
+                return country_matches
+
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def search_by_language(self, language, n=10, show_details=True):
+        """Search movies by original language with centralized display"""
+        try:
+            if 'orig_lang' not in self.qualified_movies.columns:
+                return "❌ Language information not available in dataset"
+
+            lang_matches = self.qualified_movies[
+                self.qualified_movies['orig_lang'].str.contains(language, case=False, na=False)
+            ]
+
+            if lang_matches.empty:
+                return f"❌ No movies found in language '{language}'"
+
+            lang_matches = lang_matches.nlargest(n, 'weighted_rating').copy()
+
+            if show_details:
+                return self.display_centralized_results(lang_matches, "Language Search", language, n)
+            else:
+                return lang_matches
 
         except Exception as e:
             return f"❌ Error: {str(e)}"
@@ -230,13 +432,14 @@ class IMDBContentBasedRecommendationSystem:
 
 
 # ====================================================
-# Streamlit Terminal-style UI
+# Streamlit Enhanced UI
 # ====================================================
 def main():
-    st.set_page_config(page_title="IMDB Recommender", layout="wide")
+    st.set_page_config(page_title="Enhanced IMDB Recommender", layout="wide")
     st.title("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
     st.markdown("=================================================================")
-    st.markdown("✨ NEW FEATURES: Search by Title, Genre, Crew, or Advanced Multi-Search!")
+    st.markdown("✨ CENTRALIZED RESULTS: All searches now show comprehensive movie information!")
+    st.markdown("📊 Displays: Name, Year, Rating, Genre, Crew, Language, Country, Similarity")
 
     # Add reset button in sidebar
     if st.sidebar.button("🔄 Reset All Records", type="secondary"):
@@ -268,19 +471,21 @@ def main():
         st.warning("Please upload imdb_movies.csv in the sidebar.")
         return
 
-    # 初始化推荐器
+    # Initialize recommender
     recommender = IMDBContentBasedRecommendationSystem()
     recommender.load_imdb_data(uploaded_file)
     recommender.build_content_based_system()
 
-    # 菜单选择
+    # Enhanced menu with more options
     option = st.radio("🎯 SEARCH OPTIONS:", [
-        "1️⃣ Search by Movie Title",
-        "2️⃣ Search by Genre",
-        "3️⃣ Search by Crew",
-        "4️⃣ Advanced Search",
-        "5️⃣ Browse Genres",
-        "6️⃣ Browse Crew"
+        "1️⃣ Search by Movie Title (Content-based recommendations)",
+        "2️⃣ Search by Genre (Top-rated movies in genre)",
+        "3️⃣ Search by Crew Member (Movies with specific actor/director)",
+        "4️⃣ Advanced Search (Combine multiple criteria)",
+        "5️⃣ Search by Year (Movies from specific year)",
+        "6️⃣ Search by Country (Movies from specific country)", 
+        "7️⃣ Search by Language (Movies in specific language)",
+        "8️⃣ Top Rated Movies (Highest rated films)"
     ])
 
     # ----------------- Search by Title -----------------
@@ -313,29 +518,14 @@ def main():
             recs = st.session_state.recs
             cleaned_title = st.session_state.cleaned_title
 
-            output = []
-            output.append(f"🎬 FINDING RECOMMENDATIONS FOR: '{cleaned_title}'")
-            output.append("="*50)
-            output.append(f"🎯 Found: {movie_info['names']}")
-            output.append(f"📅 Year: {movie_info.get('date_x','Unknown')}")
-            output.append(f"🎭 Genre: {movie_info['genre']}")
-            output.append(f"⭐ Score: {movie_info['score']:.2f} → Weighted: {movie_info['weighted_rating']:.2f}")
-            output.append(f"📝 Overview: {str(movie_info['overview'])[:150]}...\n")
-            output.append(f"🔥 TOP {n_recs} RECOMMENDATIONS (SORTED BY HIGHEST SIMILARITY):")
-            output.append("-"*70)
-
-            for i, (_, rec) in enumerate(recs.iterrows()):
-                similarity_percent = rec['similarity'] * 100
-                level = recommender.get_similarity_level(rec['similarity'])
-                if i == 0:
-                    output.append(f"🏆 {i+1:2d}. {rec['names'][:40]} ⭐ TOP MATCH!")
-                else:
-                    output.append(f"   {i+1:2d}. {rec['names'][:40]}")
-                output.append(f"    🎯 Similarity: {rec['similarity']:.4f} ({similarity_percent:.1f}%) - {level}")
-                output.append(f"    ⭐ Rating: {rec['weighted_rating']:.2f}")
-                output.append(f"    🎭 Genre: {rec['genre']}\n")
-
-            st.code("\n".join(output), language="text")
+            # Use centralized display for content recommendations
+            formatted_output = recommender.display_centralized_results(
+                recs, 
+                "Content Recommendations", 
+                f"{movie_info['names']}", 
+                n_recs
+            )
+            st.code(formatted_output, language="text")
 
     # ----------------- Search by Genre -----------------
     elif option.startswith("2️⃣"):
@@ -344,16 +534,12 @@ def main():
         
         if st.button("Search by Genre"):
             if genre:
-                results = recommender.search_by_genre(genre, n=n_results, show_details=False)
-                if isinstance(results, pd.DataFrame):
-                    st.markdown(f"### 🎭 Top {len(results)} movies in '{genre}' genre:")
-                    for i, (_, movie) in enumerate(results.iterrows()):
-                        st.write(f"**{i+1}. {movie['names']}**")
-                        st.write(f"⭐ Rating: {movie['weighted_rating']:.2f}")
-                        st.write(f"🎭 Genre: {movie['genre']}")
-                        st.write("---")
-                else:
-                    st.error(results)
+                result = recommender.search_by_genre(genre, n=n_results, show_details=True)
+                if isinstance(result, str):
+                    if result.startswith("❌"):
+                        st.error(result)
+                    else:
+                        st.code(result, language="text")
 
     # ----------------- Search by Crew -----------------
     elif option.startswith("3️⃣"):
@@ -362,19 +548,16 @@ def main():
         
         if st.button("Search by Crew"):
             if crew:
-                results = recommender.search_by_crew(crew, n=n_results, show_details=False)
-                if isinstance(results, pd.DataFrame):
-                    st.markdown(f"### 👥 Top {len(results)} movies with '{crew}':")
-                    for i, (_, movie) in enumerate(results.iterrows()):
-                        st.write(f"**{i+1}. {movie['names']}**")
-                        st.write(f"⭐ Rating: {movie['weighted_rating']:.2f}")
-                        st.write(f"🎭 Genre: {movie['genre']}")
-                        st.write("---")
-                else:
-                    st.error(results)
+                result = recommender.search_by_crew(crew, n=n_results, show_details=True)
+                if isinstance(result, str):
+                    if result.startswith("❌"):
+                        st.error(result)
+                    else:
+                        st.code(result, language="text")
 
     # ----------------- Advanced Search -----------------
     elif option.startswith("4️⃣"):
+        st.markdown("🔍 Advanced Search - Enter criteria (leave empty to skip):")
         col1, col2, col3 = st.columns(3)
         with col1:
             genre = st.text_input("🎭 Genre (optional):")
@@ -386,37 +569,71 @@ def main():
         n_results = st.slider("📊 Max results", 1, 20, 10)
         
         if st.button("Advanced Search"):
-            results = recommender.advanced_search(
+            result = recommender.advanced_search(
                 genre=genre if genre else None,
                 crew=crew if crew else None,
                 min_rating=min_rating if min_rating > 0 else None,
-                max_results=n_results
+                max_results=n_results,
+                show_details=True
             )
-            if isinstance(results, pd.DataFrame):
-                st.markdown(f"### 🔍 Search Results ({len(results)} movies):")
-                for i, (_, movie) in enumerate(results.iterrows()):
-                    st.write(f"**{i+1}. {movie['names']}**")
-                    st.write(f"⭐ Rating: {movie['weighted_rating']:.2f}")
-                    st.write(f"🎭 Genre: {movie['genre']}")
-                    if crew:
-                        st.write(f"👥 Crew: {movie['crew'][:100]}...")
-                    st.write("---")
-            else:
-                st.error(results)
+            if isinstance(result, str):
+                if result.startswith("❌"):
+                    st.error(result)
+                else:
+                    st.code(result, language="text")
 
-    # ----------------- Browse Genres -----------------
+    # ----------------- Search by Year -----------------
     elif option.startswith("5️⃣"):
-        st.markdown("### 🎭 Available Genres:")
-        genres = recommender.get_genre_list()
-        for i, genre in enumerate(genres):
-            st.write(f"{i+1}. {genre}")
+        year_input = st.number_input("📅 Enter release year:", min_value=1900, max_value=2024, value=2020)
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        
+        if st.button("Search by Year"):
+            result = recommender.search_by_year(int(year_input), n=n_results, show_details=True)
+            if isinstance(result, str):
+                if result.startswith("❌"):
+                    st.error(result)
+                else:
+                    st.code(result, language="text")
 
-    # ----------------- Browse Crew -----------------
+    # ----------------- Search by Country -----------------
     elif option.startswith("6️⃣"):
-        st.markdown("### 👥 Popular Crew Members:")
-        crew_list = recommender.get_popular_crew()
-        for i, person in enumerate(crew_list):
-            st.write(f"{i+1}. {person}")
+        country = st.text_input("🌍 Enter country name:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        
+        if st.button("Search by Country"):
+            if country:
+                result = recommender.search_by_country(country, n=n_results, show_details=True)
+                if isinstance(result, str):
+                    if result.startswith("❌"):
+                        st.error(result)
+                    else:
+                        st.code(result, language="text")
+
+    # ----------------- Search by Language -----------------
+    elif option.startswith("7️⃣"):
+        language = st.text_input("🗣️ Enter language (e.g., 'en', 'english'):")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        
+        if st.button("Search by Language"):
+            if language:
+                result = recommender.search_by_language(language, n=n_results, show_details=True)
+                if isinstance(result, str):
+                    if result.startswith("❌"):
+                        st.error(result)
+                    else:
+                        st.code(result, language="text")
+
+    # ----------------- Top Rated Movies -----------------
+    elif option.startswith("8️⃣"):
+        n_results = st.slider("📊 Number of top movies", 1, 50, 20)
+        
+        if st.button("Get Top Movies"):
+            result = recommender.get_top_movies_by_rating(n=n_results, show_details=True)
+            if isinstance(result, str):
+                if result.startswith("❌"):
+                    st.error(result)
+                else:
+                    st.code(result, language="text")
 
 
 if __name__ == "__main__":
