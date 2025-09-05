@@ -422,15 +422,13 @@ def main():
 
     # Sidebar upload / reset like again.txt
     uploaded_file = st.sidebar.file_uploader("Upload IMDB dataset (CSV)", type="csv")
-    if st.sidebar.button("🔄 Reset All Records"):
-        # clear session state (but not the uploaded file)
-        for k in list(st.session_state.keys()):
-            if k.startswith("choices_") or k.startswith("confirmed_") or k in ("last_query",):
-                try:
-                    del st.session_state[k]
-                except:
-                    pass
-        st.experimental_rerun()
+if st.sidebar.button("🔄 Reset All Records"):
+    keys_to_clear = [k for k in st.session_state.keys() if k.startswith(("choices_", "confirmed_", "choose_", "confirmed_"))]
+    for k in keys_to_clear:
+        del st.session_state[k]
+    for key in ["title", "genre", "crew", "year_input", "country", "language"]:
+        if key in st.session_state:
+            st.session_state[key] = ""
 
     if not uploaded_file:
         st.warning("Please upload imdb_movies.csv in the sidebar.")
@@ -642,4 +640,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
