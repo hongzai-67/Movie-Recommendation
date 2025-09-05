@@ -29,8 +29,10 @@ class IMDBContentBasedRecommendationSystem:
         return cleaned
 
     def load_imdb_data(self, file_obj):
+        # file_obj: uploaded file-like or filepath
         self.movies_df = pd.read_csv(file_obj, low_memory=False)
 
+        # ensure expected columns exist
         if 'overview' not in self.movies_df:
             self.movies_df['overview'] = ''
         if 'genre' not in self.movies_df:
@@ -51,40 +53,46 @@ class IMDBContentBasedRecommendationSystem:
         self.movies_df['original_title'] = self.movies_df['orig_title'].copy()
         self.movies_df['orig_title'] = self.movies_df['orig_title'].apply(self.clean_title_text)
 
+        # drop duplicates based on cleaned title
         self.movies_df = self.movies_df.drop_duplicates(subset=['orig_title']).reset_index(drop=True)
 
+        # enhanced content used by TF-IDF
         self.movies_df['enhanced_content'] = (
             self.movies_df['overview'].astype(str) + ' ' +
             self.movies_df['genre'].astype(str).str.replace('|', ' ') + ' ' +
             self.movies_df['crew'].astype(str)
         )
 
-        for col in ['score', 'revenue']:
-            if col not in self.movies_df:
-                self.movies_df[col] = np.nan
+        # ensure numeric cols exist
+        for c in ['score', 'revenue', 'budget_x']:
+            if c not in self.movies_df.columns:
+                self.movies_df[c] = np.nan
 
     def calculate_weighted_ratings(self):
-        self.movies_df['vote_count'] = (
-            (self.movies_df['revenue'].fillna(0) / 1_000_000) *
-            (self.movies_df['score'].fillna(5) / 10) *
-            np.random.uniform(3, 6, len(self.movies_df))
-        ).astype(int)
+        # synthetic vote_count if missing
+        if 'vote_count' not in self.movies_df.columns:
+            self.movies_df['vote_count'] = (
+                (self.movies_df['revenue'].fillna(0) / 1_000_000) *
+                (self.movies_df['score'].fillna(5) / 10) *
+                np.random.uniform(3, 6, len(self.movies_df))
+            ).astype(int)
 
         self.movies_df['vote_count'] = self.movies_df['vote_count'].clip(lower=1)
 
         self.average_rating = float(self.movies_df['score'].mean()) if 'score' in self.movies_df else 5.0
-        self.vote_threshold = int(self.movies_df['vote_count'].quantile(0.90))
+        self.vote_threshold = int(self.movies_df['vote_count'].quantile(0.90)) if not self.movies_df.empty else 1
 
         def weighted_rating(x, m=self.vote_threshold, C=self.average_rating):
-            v = x['vote_count']
-            R = x['score']
-            return (v/(v+m) * R) + (m/(m+v) * C)
+            v = x['vote_count'] if 'vote_count' in x else 0
+            R = x['score'] if 'score' in x else C
+            return (v/(v+m) * R) + (m/(m+v) * C) if (v + m) > 0 else C
 
         self.movies_df['weighted_rating'] = self.movies_df.apply(weighted_rating, axis=1)
         self.qualified_movies = self.movies_df.copy()
 
     def build_content_based_system(self):
         working_df = self.qualified_movies.copy()
+        # TF-IDF params matched to your newcode.txt
         self.tfidf_vectorizer = TfidfVectorizer(
             stop_words='english',
             max_features=10000,
@@ -92,212 +100,528 @@ class IMDBContentBasedRecommendationSystem:
             min_df=2,
             max_df=0.8
         )
-        self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(working_df['enhanced_content'].fillna(''))
+        working_df['enhanced_content'] = working_df['enhanced_content'].fillna('')
+        self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(working_df['enhanced_content'])
         self.cosine_sim = linear_kernel(self.tfidf_matrix, self.tfidf_matrix)
         self.indices = pd.Series(working_df.index, index=working_df['orig_title']).drop_duplicates()
         self.qualified_movies = working_df
 
     # ---------------------------
-    # Search / Recommendation Methods
+    # Centralized formatting (matches again.txt / Colab sample)
+    # ---------------------------
+    def get_similarity_level(self, similarity_score):
+        if similarity_score >= 0.87:
+            return "🔥 VERY HIGH"
+        elif similarity_score >= 0.86:
+            return "🟢 HIGH"
+        elif similarity_score >= 0.85:
+            return "🟡 MODERATE"
+        elif similarity_score >= 0.84:
+            return "🟠 LOW"
+        else:
+            return "🔴 VERY LOW"
+
+    def display_centralized_results(self, results_df, search_type="Search", original_query="", n=10):
+        """
+        Build a text block that matches the centralized CLI-like output in again.txt / your Colab sample.
+        Returns a single string suitable for st.code(..., language='text')
+        """
+        if results_df is None:
+            return "❌ No results found!"
+        if isinstance(results_df, str):
+            return results_df
+        if results_df.empty:
+            return "❌ No results found!"
+
+        display_count = min(n, len(results_df))
+        display_results = results_df.head(display_count).copy()
+
+        lines = []
+        lines.append("="*80)
+        lines.append(f"🎬 {search_type.upper()} RESULTS FOR: '{original_query}'")
+        lines.append("="*80)
+        lines.append(f"📊 Showing {display_count} results:")
+        lines.append("-" * 80)
+
+        for i, (_, movie) in enumerate(display_results.iterrows()):
+            # Title line
+            if i == 0 and search_type.endswith("Recommendations"):
+                lines.append(f"🏆 {i+1}. {movie.get('names', movie.get('original_title',''))[:60]} ⭐ TOP MATCH!")
+            else:
+                lines.append(f"🎬 {i+1}. {movie.get('names', movie.get('original_title',''))[:60]}")
+
+            # Year
+            try:
+                if 'date_x' in movie.index:
+                    movie_year = pd.to_datetime(movie['date_x'], errors='coerce')
+                    if pd.notna(movie_year):
+                        lines.append(f"📅 Year: {movie_year.year} ", end='') if False else None
+            except:
+                pass
+
+            # Build info line (Year + Rating)
+            info_parts = []
+            try:
+                if 'date_x' in movie.index:
+                    movie_year = pd.to_datetime(movie['date_x'], errors='coerce')
+                    if pd.notna(movie_year):
+                        info_parts.append(f"📅 Year: {movie_year.year}")
+                    else:
+                        info_parts.append("📅 Year: Unknown")
+                else:
+                    info_parts.append("📅 Year: Unknown")
+            except:
+                info_parts.append("📅 Year: Unknown")
+
+            if 'weighted_rating' in movie.index:
+                info_parts.append(f"⭐ Rating: {movie['weighted_rating']:.2f}")
+            elif 'score' in movie.index and not pd.isna(movie['score']):
+                info_parts.append(f"⭐ Rating: {movie['score']:.2f}")
+
+            lines.append(" ".join(info_parts))
+
+            # Genre
+            if 'genre' in movie.index:
+                genre_display = str(movie['genre'])
+                lines.append(f"🎭 Genre: {genre_display}")
+
+            # Crew
+            if 'crew' in movie.index:
+                crew_display = str(movie['crew'])
+                if len(crew_display) > 120:
+                    crew_display = crew_display[:117] + "..."
+                lines.append(f"👥 Crew: {crew_display}")
+
+            # Language
+            if 'orig_lang' in movie.index and pd.notna(movie['orig_lang']):
+                lines.append(f"🗣️ Language:  {movie['orig_lang']}")
+
+            # Country
+            if 'country' in movie.index and pd.notna(movie['country']):
+                lines.append(f"🌍 Country: {movie['country']}")
+
+            # Budget & Revenue
+            try:
+                if 'budget_x' in movie.index and pd.notna(movie['budget_x']) and float(movie['budget_x']) > 0:
+                    lines.append(f"💰 Budget: ${float(movie['budget_x']):,.1f}")
+            except:
+                pass
+            try:
+                if 'revenue' in movie.index and pd.notna(movie['revenue']) and float(movie['revenue']) > 0:
+                    lines.append(f"💵 Revenue: ${float(movie['revenue']):,.1f}")
+            except:
+                pass
+
+            # Similarity (for content/hybrid)
+            if 'similarity' in movie.index:
+                sim = movie['similarity']
+                lines.append(f"🎯 Similarity: {sim:.4f} ({sim*100:.1f}%) - {self.get_similarity_level(sim)}")
+
+            if 'hybrid_score' in movie.index:
+                hs = movie['hybrid_score']
+                lines.append(f"🔀 Hybrid Score: {hs:.4f}")
+
+            # empty line between entries
+            lines.append("")
+
+        lines.append("="*80)
+        return "\n".join(lines)
+
+    # ---------------------------
+    # Search & Recommendation Methods (kept like again.txt)
     # ---------------------------
     def get_content_recommendations(self, title, n=10):
-        if self.indices is None: 
-            return None,None,None
+        if self.indices is None:
+            return None, None, None
         if title not in self.indices:
-            possible = self.qualified_movies[self.qualified_movies['orig_title'].str.contains(title, case=False, na=False)]
-            if possible.empty: return None,None,None
-            return "choose", possible.head(8), None
+            possible_matches = self.qualified_movies[
+                self.qualified_movies['orig_title'].str.contains(title, case=False, na=False)
+            ]
+            if possible_matches.empty:
+                return None, None, None
+            return "choose", possible_matches.head(8), None
+
         idx = self.indices[title]
-        if hasattr(idx,'__iter__') and not isinstance(idx,str):
-            idx = idx.iloc[0]
+        if hasattr(idx, '__iter__') and not isinstance(idx, str):
+            idx = idx.iloc[0] if hasattr(idx, 'iloc') else idx[0]
+
         sim_scores = list(enumerate(self.cosine_sim[idx]))
-        sim_scores = sorted(sim_scores,key=lambda x:x[1],reverse=True)[1:n+1]
-        ids = [i for i,_ in sim_scores]; sims=[s for _,s in sim_scores]
-        recs = self.qualified_movies.iloc[ids].copy(); recs['similarity']=sims
-        return "ok", self.qualified_movies.loc[idx], recs
+        sim_values = [score for _, score in sim_scores]
+        min_sim = min(sim_values) if sim_values else 0
+        max_sim = max(sim_values) if sim_values else 1
+
+        if max_sim == min_sim:
+            scaled_sim_scores = [(i, 0.8) for i, _ in sim_scores]
+        else:
+            scaled_sim_scores = [
+                (i, 0.8 + (score - min_sim) * (1.0 - 0.8) / (max_sim - min_sim))
+                for i, score in sim_scores
+            ]
+
+        scaled_sim_scores = sorted(scaled_sim_scores, key=lambda x: x[1], reverse=True)[1:n+1]
+        movie_indices = [i[0] for i in scaled_sim_scores]
+        similarity_values = [i[1] for i in scaled_sim_scores]
+
+        movies = self.qualified_movies.iloc[movie_indices].copy()
+        movies['similarity'] = similarity_values
+
+        return "ok", self.qualified_movies.loc[idx], movies
 
     def search_by_genre(self, genre, n=10):
-        matches = self.qualified_movies[self.qualified_movies['genre'].str.contains(genre, case=False, na=False)]
-        return matches.nlargest(n,'weighted_rating')
+        matches = self.qualified_movies[
+            self.qualified_movies['genre'].str.contains(genre, case=False, na=False)
+        ]
+        return matches.nlargest(n, 'weighted_rating')
 
     def search_by_crew(self, crew, n=10):
-        matches = self.qualified_movies[self.qualified_movies['crew'].str.contains(crew, case=False, na=False)]
-        return matches.nlargest(n,'weighted_rating')
+        matches = self.qualified_movies[
+            self.qualified_movies['crew'].str.contains(crew, case=False, na=False)
+        ]
+        return matches.nlargest(n, 'weighted_rating')
 
     def get_top_movies_by_rating(self, n=20):
-        return self.qualified_movies.nlargest(n,'weighted_rating')
+        return self.qualified_movies.nlargest(n, 'weighted_rating')
 
     def search_by_year(self, year, n=10):
-        self.qualified_movies['year']=pd.to_datetime(self.qualified_movies['date_x'],errors='coerce').dt.year
-        matches=self.qualified_movies[self.qualified_movies['year']==year]
-        return matches.nlargest(n,'weighted_rating')
+        self.qualified_movies['year'] = pd.to_datetime(self.qualified_movies['date_x'], errors='coerce').dt.year
+        matches = self.qualified_movies[self.qualified_movies['year'] == year]
+        return matches.nlargest(n, 'weighted_rating')
 
-    def search_by_country(self,country,n=10):
-        matches=self.qualified_movies[self.qualified_movies['country'].astype(str).str.contains(country,case=False,na=False)]
-        return matches.nlargest(n,'weighted_rating')
+    def search_by_country(self, country, n=10):
+        matches = self.qualified_movies[
+            self.qualified_movies['country'].astype(str).str.contains(country, case=False, na=False)
+        ]
+        return matches.nlargest(n, 'weighted_rating')
 
-    def search_by_language(self,lang,n=10):
-        matches=self.qualified_movies[self.qualified_movies['orig_lang'].str.contains(lang,case=False,na=False)]
-        return matches.nlargest(n,'weighted_rating')
+    def search_by_language(self, language, n=10):
+        matches = self.qualified_movies[
+            self.qualified_movies['orig_lang'].str.contains(language, case=False, na=False)
+        ]
+        return matches.nlargest(n, 'weighted_rating')
 
-    # --- hybrid ---
-    def get_hybrid_recommendations(self,title,n=10,alpha=0.7):
-        if 'popularity_norm' not in self.qualified_movies:
-            r=self.qualified_movies['weighted_rating'].fillna(self.average_rating)
-            self.qualified_movies['popularity_norm']=(r-r.min())/(r.max()-r.min())
+    # ---------------------------
+    # Hybrid & Evaluation (from newcode.txt)
+    # ---------------------------
+    def get_hybrid_recommendations(self, title, n=10, alpha=0.7):
+        # ensure popularity_norm
+        if 'popularity_norm' not in self.qualified_movies.columns:
+            ratings = self.qualified_movies['weighted_rating'].fillna(self.average_rating)
+            min_r, max_r = ratings.min(), ratings.max()
+            denom = (max_r - min_r) if max_r != min_r else 1.0
+            self.qualified_movies['popularity_norm'] = (ratings - min_r) / denom
+
         if title not in self.indices:
-            possible=self.qualified_movies[self.qualified_movies['orig_title'].str.contains(title,case=False,na=False)]
-            if possible.empty: return None,None,None
-            return "choose",possible.head(8),None
-        idx=self.indices[title]
-        if hasattr(idx,'__iter__') and not isinstance(idx,str): idx=idx.iloc[0]
-        sims=list(enumerate(self.cosine_sim[idx])); sims=[(i,s) for i,s in sims if i!=idx]
-        ids=[i for i,_ in sims]; simvals=[s for _,s in sims]
-        recs=self.qualified_movies.iloc[ids].copy(); recs['similarity']=simvals
-        recs['hybrid_score']=alpha*recs['similarity']+(1-alpha)*recs['popularity_norm']
-        return "ok", self.qualified_movies.loc[idx], recs.sort_values('hybrid_score',ascending=False).head(n)
+            possible = self.qualified_movies[self.qualified_movies['orig_title'].str.contains(title, case=False, na=False)]
+            if possible.empty:
+                return None, None, None
+            return "choose", possible.head(8), None
 
-    # --- evaluation ---
-    def run_all_evaluations(self,k=10,sample_size=100,progress_callback=None):
-        results={}
-        titles=self.qualified_movies['orig_title'].tolist()[:sample_size]
-        precisions=[];recalls=[]
-        for idx,title in enumerate(titles):
-            status,_,recs=self.get_content_recommendations(title,n=k)
-            if recs is None or recs.empty: continue
-            src=self.qualified_movies[self.qualified_movies['orig_title']==title]
-            src_gen=set(str(src.iloc[0]['genre']).split('|'))
-            relevant=self.qualified_movies[self.qualified_movies['genre'].apply(lambda g:len(src_gen & set(str(g).split('|')))>0)]
-            rel_idx=set(relevant.index)-set(src.index)
-            rec_idx=set(recs.index)
-            tp=len(rec_idx & rel_idx)
-            precisions.append(tp/max(1,len(rec_idx)))
-            recalls.append(tp/max(1,len(rel_idx)))
-            if progress_callback: progress_callback(int((idx+1)/len(titles)*50),"Evaluating PRF...")
-        prec=np.mean(precisions) if precisions else 0; rec=np.mean(recalls) if recalls else 0
-        f1=2*prec*rec/(prec+rec) if prec+rec>0 else 0
-        results.update({'precision':prec,'recall':rec,'f1':f1})
-        # RMSE
-        y_true=[];y_pred=[]
-        for idx in range(min(sample_size,len(self.qualified_movies))):
-            sims=list(enumerate(self.cosine_sim[idx])); sims=[(i,s) for i,s in sims if i!=idx]
-            sims=sorted(sims,key=lambda x:x[1],reverse=True)[:k]
-            if not sims: continue
-            ids=[i for i,_ in sims]; weights=np.array([s for _,s in sims])
-            ratings=self.qualified_movies.iloc[ids]['weighted_rating'].fillna(self.average_rating).values
-            pred=(weights@ratings)/weights.sum() if weights.sum()>0 else ratings.mean()
-            y_true.append(self.qualified_movies.iloc[idx]['weighted_rating']); y_pred.append(pred)
-            if progress_callback: progress_callback(50+int((idx+1)/len(self.qualified_movies)*50),"Evaluating RMSE...")
+        idx = self.indices[title]
+        if hasattr(idx, '__iter__') and not isinstance(idx, str):
+            idx = idx.iloc[0] if hasattr(idx, 'iloc') else idx[0]
+
+        sim_scores = list(enumerate(self.cosine_sim[idx]))
+        sim_scores = [(i, s) for i, s in sim_scores if i != idx]
+
+        candidate_indices = [i for i, _ in sim_scores]
+        candidates_df = self.qualified_movies.iloc[candidate_indices].copy()
+        candidates_df['similarity'] = [s for _, s in sim_scores]
+
+        candidates_df['hybrid_score'] = alpha * candidates_df['similarity'] + (1 - alpha) * candidates_df['popularity_norm']
+
+        recommendations = candidates_df.sort_values('hybrid_score', ascending=False).head(n)
+        return "ok", self.qualified_movies.loc[idx], recommendations
+
+    def run_all_evaluations(self, k=10, sample_size=50, progress_callback=None):
+        results = {}
+        titles = self.qualified_movies['orig_title'].tolist()[:sample_size]
+        precisions, recalls = [], []
+
+        for i, title in enumerate(titles):
+            status, _, recs = self.get_content_recommendations(title, n=k)
+            if recs is None or recs.empty:
+                continue
+            src = self.qualified_movies[self.qualified_movies['orig_title'] == title]
+            src_genres = set(str(src.iloc[0]['genre']).split('|'))
+            relevant_mask = self.qualified_movies['genre'].apply(
+                lambda g: len(src_genres.intersection(set(str(g).split('|')))) > 0
+            )
+            relevant_indices = set(self.qualified_movies[relevant_mask].index) - set(src.index)
+            rec_indices = set(recs.index)
+            tp = len(rec_indices & relevant_indices)
+            precisions.append(tp / max(1, len(rec_indices)))
+            recalls.append(tp / max(1, len(relevant_indices)))
+
+            if progress_callback:
+                progress_callback(int((i + 1) / len(titles) * 50), "Evaluating Precision/Recall/F1...")
+
+        precision = float(np.mean(precisions)) if precisions else 0.0
+        recall = float(np.mean(recalls)) if recalls else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        results.update({'precision': precision, 'recall': recall, 'f1': f1})
+
+        # Rating prediction RMSE
+        y_true, y_pred = [], []
+        n_samples = min(sample_size, len(self.qualified_movies))
+        for idx in range(n_samples):
+            sims = list(enumerate(self.cosine_sim[idx]))
+            sims = [(i, s) for i, s in sims if i != idx]
+            sims = sorted(sims, key=lambda x: x[1], reverse=True)[:k]
+            if not sims:
+                continue
+            neighbor_idx = [i for i, _ in sims]
+            weights = np.array([s for _, s in sims], dtype=float)
+            neighbor_ratings = self.qualified_movies.iloc[neighbor_idx]['weighted_rating'].fillna(self.average_rating).values
+            w_sum = weights.sum()
+            pred = float((weights @ neighbor_ratings) / w_sum) if w_sum > 0 else float(np.mean(neighbor_ratings))
+            y_true.append(float(self.qualified_movies.iloc[idx]['weighted_rating']))
+            y_pred.append(pred)
+
+            if progress_callback:
+                progress_callback(50 + int((idx + 1) / n_samples * 50), "Evaluating RMSE...")
+
         if y_true:
-            errors=np.array(y_true)-np.array(y_pred)
-            mse=np.mean(errors**2); rmse=sqrt(mse)
-            results.update({'mse':mse,'rmse':rmse})
+            errors = np.array(y_true) - np.array(y_pred)
+            mse = float(np.mean(errors ** 2))
+            rmse = float(sqrt(mse))
+            results.update({'mse': mse, 'rmse': rmse})
         else:
-            results.update({'mse':None,'rmse':None})
+            results.update({'mse': None, 'rmse': None})
+
         return results
 
+
 # ---------------------------
-# Streamlit App
+# Streamlit App (keeps again.txt UI & output style)
 # ---------------------------
 def main():
-    st.set_page_config(page_title="IMDB Recommender",layout="wide")
-    st.title("🎮 Enhanced IMDB Movie Recommendation System")
+    st.set_page_config(page_title="ENHANCED IMDB RECOMMENDER", layout="wide")
+    # Top header matching your Colab output styling
+    st.markdown("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
+    st.markdown("=================================================================")
+    st.markdown("✨ CENTRALIZED RESULTS: All searches now show comprehensive movie information!")
+    st.markdown("📊 Displays: Name, Year, Rating, Genre, Crew, Language, Country, Similarity")
+    st.write("")
 
-    uploaded=st.sidebar.file_uploader("Upload IMDB CSV",type="csv")
-    if not uploaded:
-        st.warning("Upload dataset first.")
+    # Sidebar upload / reset like again.txt
+    uploaded_file = st.sidebar.file_uploader("Upload IMDB dataset (CSV)", type="csv")
+    if st.sidebar.button("🔄 Reset All Records"):
+        # clear session state (but not the uploaded file)
+        for k in list(st.session_state.keys()):
+            if k.startswith("choices_") or k.startswith("confirmed_") or k in ("last_query",):
+                try:
+                    del st.session_state[k]
+                except:
+                    pass
+        st.experimental_rerun()
+
+    if not uploaded_file:
+        st.warning("Please upload imdb_movies.csv in the sidebar.")
         return
 
-    recommender=IMDBContentBasedRecommendationSystem()
-    recommender.load_imdb_data(uploaded)
-    recommender.build_content_based_system()
+    recommender = IMDBContentBasedRecommendationSystem()
+    try:
+        recommender.load_imdb_data(uploaded_file)
+    except Exception as e:
+        st.error(f"Failed to load dataset: {e}")
+        return
 
-    opt=st.radio("Options:",[
-        "1️⃣ Title Recommendations",
-        "2️⃣ Genre Search",
-        "3️⃣ Crew Search",
-        "4️⃣ Year Search",
-        "5️⃣ Country Search",
-        "6️⃣ Language Search",
-        "7️⃣ Top Rated",
-        "8️⃣ Hybrid Recommendations",
-        "9️⃣ Run Evaluation Suite"
+    try:
+        recommender.build_content_based_system()
+    except Exception as e:
+        st.error(f"Failed to build content system: {e}")
+        return
+
+    # Menu (keeps numbering and labels same as your sample)
+    option = st.radio("🎯 SEARCH OPTIONS:", [
+        "1️⃣ Search by Movie Title (Content-based recommendations)",
+        "2️⃣ Search by Genre (Top-rated movies in genre)",
+        "3️⃣ Search by Crew Member (Movies with specific actor/director)",
+        "4️⃣ Search by Year (Movies from specific year)",
+        "5️⃣ Search by Country (Movies from specific country)",
+        "6️⃣ Search by Language (Movies in specific language)",
+        "7️⃣ Top Rated Movies (Highest rated films)",
+        "8️⃣ Hybrid Recommendations (Content + Popularity)",
+        "9️⃣ Run Evaluation Suite (Precision/Recall & RMSE)",
+        "🔟 Exit"
     ])
 
-    # Title recs
-    if opt.startswith("1️⃣"):
-        title=st.text_input("Enter movie title:")
-        n=st.slider("Number of recs",1,20,10)
-        if st.button("Get Recs"):
-            st.session_state.pop('confirmed_title',None)
-            status,movie,recs=recommender.get_content_recommendations(recommender.clean_title_text(title),n)
-            if status=="choose":
-                st.session_state['choices_title']=movie['names'].tolist() if 'names' in movie else movie['original_title'].tolist()
-            elif status=="ok":
-                st.dataframe(recs[['names','genre','score','similarity']])
+    # ----------------- 1. Title (content-based) -----------------
+    if option.startswith("1️⃣"):
+        st.subheader("Search by Movie Title (Content-based recommendations)")
+        title = st.text_input("🎬 Enter a movie title:")
+        n_recs = st.slider("📊 Number of recommendations", 1, 20, 10)
+
+        if st.button("Get Recommendations"):
+            st.session_state.pop('choices_title', None)
+            st.session_state.pop('confirmed_title', None)
+            cleaned = recommender.clean_title_text(title)
+            status, movie_info, recs = recommender.get_content_recommendations(cleaned, n=n_recs)
+            if status is None:
+                st.error("❌ No matches found.")
+            elif status == "choose":
+                # store choices in session for confirm workflow
+                choices = movie_info['names'].tolist() if 'names' in movie_info else movie_info['original_title'].tolist()
+                st.session_state['choices_title'] = choices
+            elif status == "ok":
+                formatted = recommender.display_centralized_results(recs, "Content Recommendations", movie_info.get('names', ''), n_recs)
+                st.code(formatted, language="text")
+
+        # confirm selection UI preserved using session_state
         if 'choices_title' in st.session_state:
-            choice=st.selectbox("Multiple matches found:",st.session_state['choices_title'])
+            st.markdown("🔍 Did you mean one of these?")
+            choice = st.selectbox("🎯 Select a movie:", st.session_state['choices_title'], key="choose_title_select")
             if st.button("Confirm Selection"):
-                st.session_state['confirmed_title']=choice
-                st.session_state.pop('choices_title')
+                st.session_state['confirmed_title'] = choice
+                del st.session_state['choices_title']
+
         if 'confirmed_title' in st.session_state:
-            status2,movie2,recs2=recommender.get_content_recommendations(recommender.clean_title_text(st.session_state['confirmed_title']),n)
-            if status2=="ok":
-                st.dataframe(recs2[['names','genre','score','similarity']])
+            cleaned_choice = recommender.clean_title_text(st.session_state['confirmed_title'])
+            status2, movie_info2, recs2 = recommender.get_content_recommendations(cleaned_choice, n=n_recs)
+            if status2 == "ok":
+                formatted = recommender.display_centralized_results(recs2, "Content Recommendations", movie_info2.get('names', ''), n_recs)
+                st.code(formatted, language="text")
 
-    # Hybrid recs
-    elif opt.startswith("8️⃣"):
-        title=st.text_input("Enter movie title for hybrid:")
-        alpha=st.slider("Alpha weight",0.0,1.0,0.7,0.05)
-        n=st.slider("Number hybrid recs",1,20,10)
-        if st.button("Get Hybrid Recs"):
-            st.session_state.pop('confirmed_hybrid',None)
-            status,movie,recs=recommender.get_hybrid_recommendations(recommender.clean_title_text(title),n,alpha)
-            if status=="choose":
-                st.session_state['choices_hybrid']=movie['names'].tolist() if 'names' in movie else movie['original_title'].tolist()
-            elif status=="ok":
-                st.dataframe(recs[['names','genre','score','hybrid_score']])
+    # ----------------- 2. Genre -----------------
+    elif option.startswith("2️⃣"):
+        st.subheader("Search by Genre")
+        genre = st.text_input("🎭 Enter a genre:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        if st.button("Search by Genre"):
+            res = recommender.search_by_genre(genre, n=n_results)
+            formatted = recommender.display_centralized_results(res, "Genre Search", genre, n=n_results)
+            st.code(formatted, language="text")
+
+    # ----------------- 3. Crew -----------------
+    elif option.startswith("3️⃣"):
+        st.subheader("Search by Crew Member")
+        crew = st.text_input("👥 Enter crew member name:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        if st.button("Search by Crew"):
+            res = recommender.search_by_crew(crew, n=n_results)
+            formatted = recommender.display_centralized_results(res, "Crew Search", crew, n=n_results)
+            st.code(formatted, language="text")
+
+    # ----------------- 4. Year -----------------
+    elif option.startswith("4️⃣"):
+        st.subheader("Search by Year")
+        year_input = st.number_input("📅 Enter release year:", min_value=1800, max_value=2100, value=2020)
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        if st.button("Search by Year"):
+            res = recommender.search_by_year(year_input, n=n_results)
+            formatted = recommender.display_centralized_results(res, "Year Search", str(year_input), n=n_results)
+            st.code(formatted, language="text")
+
+    # ----------------- 5. Country -----------------
+    elif option.startswith("5️⃣"):
+        st.subheader("Search by Country")
+        country = st.text_input("🌍 Enter country name:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        if st.button("Search by Country"):
+            res = recommender.search_by_country(country, n=n_results)
+            formatted = recommender.display_centralized_results(res, "Country Search", country, n=n_results)
+            st.code(formatted, language="text")
+
+    # ----------------- 6. Language -----------------
+    elif option.startswith("6️⃣"):
+        st.subheader("Search by Language")
+        language = st.text_input("🗣️ Enter language:")
+        n_results = st.slider("📊 Number of results", 1, 20, 10)
+        if st.button("Search by Language"):
+            res = recommender.search_by_language(language, n=n_results)
+            formatted = recommender.display_centralized_results(res, "Language Search", language, n=n_results)
+            st.code(formatted, language="text")
+
+    # ----------------- 7. Top Rated -----------------
+    elif option.startswith("7️⃣"):
+        st.subheader("Top Rated Movies")
+        n_results = st.slider("📊 Number of results", 1, 50, 20)
+        if st.button("Show Top Rated Movies"):
+            res = recommender.get_top_movies_by_rating(n=n_results)
+            formatted = recommender.display_centralized_results(res, "Top Rated Movies", f"Top {n_results} Movies", n=n_results)
+            st.code(formatted, language="text")
+
+    # ----------------- 8. Hybrid Recommendations -----------------
+    elif option.startswith("8️⃣"):
+        st.subheader("Hybrid Recommendations (Content + Popularity)")
+        title = st.text_input("🎬 Enter a movie title:")
+        alpha = st.slider("⚖️ Alpha for hybrid (0-1)", 0.0, 1.0, 0.7, step=0.05)
+        n_recs = st.slider("📊 Number of recommendations", 1, 20, 10)
+
+        if st.button("Get Hybrid Recommendations"):
+            st.session_state.pop('choices_hybrid', None)
+            st.session_state.pop('confirmed_hybrid', None)
+            cleaned = recommender.clean_title_text(title)
+            status, movie_info, recs = recommender.get_hybrid_recommendations(cleaned, n=n_recs, alpha=alpha)
+            if status is None:
+                st.error("❌ No matches found.")
+            elif status == "choose":
+                choices = movie_info['names'].tolist() if 'names' in movie_info else movie_info['original_title'].tolist()
+                st.session_state['choices_hybrid'] = choices
+            elif status == "ok":
+                formatted = recommender.display_centralized_results(recs, "Hybrid Recommendations", movie_info.get('names', ''), n_recs)
+                st.code(formatted, language="text")
+
         if 'choices_hybrid' in st.session_state:
-            choice=st.selectbox("Multiple matches:",st.session_state['choices_hybrid'])
-            if st.button("Confirm Hybrid Selection"):
-                st.session_state['confirmed_hybrid']=choice
-                st.session_state.pop('choices_hybrid')
+            st.markdown("🔍 Did you mean one of these?")
+            choice = st.selectbox("🎯 Select a movie:", st.session_state['choices_hybrid'], key="choose_hybrid_select")
+            if st.button("Confirm Selection (Hybrid)"):
+                st.session_state['confirmed_hybrid'] = choice
+                del st.session_state['choices_hybrid']
+
         if 'confirmed_hybrid' in st.session_state:
-            status2,movie2,recs2=recommender.get_hybrid_recommendations(recommender.clean_title_text(st.session_state['confirmed_hybrid']),n,alpha)
-            if status2=="ok":
-                st.dataframe(recs2[['names','genre','score','hybrid_score']])
+            cleaned_choice = recommender.clean_title_text(st.session_state['confirmed_hybrid'])
+            status2, movie_info2, recs2 = recommender.get_hybrid_recommendations(cleaned_choice, n=n_recs, alpha=alpha)
+            if status2 == "ok":
+                formatted = recommender.display_centralized_results(recs2, "Hybrid Recommendations", movie_info2.get('names', ''), n_recs)
+                st.code(formatted, language="text")
 
-    # Other searches
-    elif opt.startswith("2️⃣"):
-        g=st.text_input("Genre:")
-        if st.button("Search Genre"): st.dataframe(recommender.search_by_genre(g,10))
+    # ----------------- 9. Run Evaluation Suite -----------------
+    elif option.startswith("9️⃣"):
+        st.subheader("Run Evaluation Suite (Precision/Recall & RMSE)")
+        k = st.slider("k (top-k)", 1, 30, 10)
+        sample_size = st.slider("Sample size (for speed)", 10, 500, 50, step=10)
+        if st.button("Run Evaluation Suite"):
+            prog = st.progress(0)
+            status_txt = st.empty()
 
-    elif opt.startswith("3️⃣"):
-        c=st.text_input("Crew:")
-        if st.button("Search Crew"): st.dataframe(recommender.search_by_crew(c,10))
+            def progress_cb(percent, message):
+                prog.progress(percent)
+                status_txt.info(message)
 
-    elif opt.startswith("4️⃣"):
-        y=st.number_input("Year:",1900,2100,2020)
-        if st.button("Search Year"): st.dataframe(recommender.search_by_year(y,10))
+            try:
+                status_txt.info("Starting evaluations...")
+                results = recommender.run_all_evaluations(k=k, sample_size=sample_size, progress_callback=progress_cb)
+                prog.empty()
+                status_txt.success("Evaluations completed.")
+                # Format output similar to your Colab example
+                header = []
+                header.append("🧪 RUNNING EVALUATIONS")
+                header.append("="*30)
+                st.code("\n".join(header), language="text")
 
-    elif opt.startswith("5️⃣"):
-        co=st.text_input("Country:")
-        if st.button("Search Country"): st.dataframe(recommender.search_by_country(co,10))
+                # show PRF
+                prf_lines = []
+                prf_lines.append(f"📏 EVALUATION (CONTENT): ")
+                prf_lines.append(f"🎯 Precision (k={k}): {results.get('precision',0):.3f} ")
+                prf_lines.append(f"📚 Recall (k={k}): {results.get('recall',0):.3f} ")
+                prf_lines.append(f"⚖️ F1: {results.get('f1',0):.3f} ")
+                st.code("\n".join(prf_lines), language="text")
 
-    elif opt.startswith("6️⃣"):
-        l=st.text_input("Language:")
-        if st.button("Search Lang"): st.dataframe(recommender.search_by_language(l,10))
+                # RMSE (may be None)
+                if 'mse' in results:
+                    rmse_lines = []
+                    rmse_lines.append("\n📉 Rating Prediction: ")
+                    rmse_lines.append(f"📊 MSE: {results.get('mse'):.4f}" if results.get('mse') is not None else "📊 MSE: N/A")
+                    rmse_lines.append(f"🔮 RMSE: {results.get('rmse'):.4f}" if results.get('rmse') is not None else "🔮 RMSE: N/A")
+                    rmse_lines.append(f"⚡ (k={k})")
+                    st.code("\n".join(rmse_lines), language="text")
+            except Exception as e:
+                st.error(f"Evaluation failed: {e}")
 
-    elif opt.startswith("7️⃣"):
-        if st.button("Top Rated"): st.dataframe(recommender.get_top_movies_by_rating(20))
+    # ----------------- Exit -----------------
+    elif option.startswith("🔟"):
+        st.write("Exiting — close the browser tab or choose another option.")
 
-    elif opt.startswith("9️⃣"):
-        k=st.slider("k",1,30,10); s=st.slider("Sample size",10,500,100,10)
-        if st.button("Run Evaluation"):
-            prog=st.progress(0); txt=st.empty()
-            def cb(p,m): prog.progress(p); txt.text(m)
-            results=recommender.run_all_evaluations(k,s,progress_callback=cb)
-            st.json(results)
-
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
