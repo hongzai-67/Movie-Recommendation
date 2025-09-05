@@ -550,27 +550,57 @@ def main():
         with col2:
             n_recs = st.slider("Number of recommendations", 1, 20, 10)
 
+        # Initialize session state for content recommendations
+        if 'content_status' not in st.session_state:
+            st.session_state.content_status = None
+        if 'content_movie_info' not in st.session_state:
+            st.session_state.content_movie_info = None
+        if 'content_n_recs' not in st.session_state:
+            st.session_state.content_n_recs = 10
+
         if st.button("Get Recommendations", type="primary"):
             if title:
                 cleaned_title = recommender.clean_title_text(title)
                 status, movie_info, recs = recommender.get_content_recommendations(cleaned_title, n=n_recs)
                 
-                if status == "choose":
-                    st.warning("🔍 Multiple matches found. Please select:")
-                    choices = movie_info['names'].tolist()
-                    choice = st.selectbox("Select a movie:", choices)
-                    if st.button("Confirm Selection"):
-                        cleaned_choice = recommender.clean_title_text(choice)
-                        status, movie_info, recs = recommender.get_content_recommendations(cleaned_choice, n=n_recs)
-                        if status == "ok":
-                            result = recommender.display_centralized_results(recs, "Content Recommendations", movie_info['names'], n_recs)
-                            st.code(result, language="text")
+                st.session_state.content_status = status
+                st.session_state.content_movie_info = movie_info
+                st.session_state.content_n_recs = n_recs
                 
-                elif status == "ok":
+                if status == "ok":
                     result = recommender.display_centralized_results(recs, "Content Recommendations", movie_info['names'], n_recs)
                     st.code(result, language="text")
+                    # Clear session state after successful result
+                    st.session_state.content_status = None
+                    st.session_state.content_movie_info = None
                 else:
                     st.error("Movie not found!")
+
+        # Handle multiple matches from session state
+        if st.session_state.content_status == "choose" and st.session_state.content_movie_info is not None:
+            st.warning("🔍 Multiple matches found. Please select:")
+            choices = st.session_state.content_movie_info['names'].tolist()
+            choice = st.selectbox("Select a movie:", choices, key="content_choice")
+            
+            if st.button("Confirm Selection", type="secondary"):
+                if choice:
+                    cleaned_choice = recommender.clean_title_text(choice)
+                    n_recs = st.session_state.content_n_recs
+                    
+                    status, movie_info, recs = recommender.get_content_recommendations(cleaned_choice, n=n_recs)
+                    if status == "ok":
+                        result = recommender.display_centralized_results(recs, "Content Recommendations", movie_info['names'], n_recs)
+                        st.code(result, language="text")
+                        
+                        # Clear session state after successful result
+                        st.session_state.content_status = None
+                        st.session_state.content_movie_info = None
+                        st.session_state.content_n_recs = 10
+                        st.rerun()
+                    else:
+                        st.error("Error processing selection!")
+                else:
+                    st.error("Please select a movie from the dropdown!")
 
     elif option.startswith("2️⃣"):
         st.subheader("🎯 Hybrid Recommendations")
