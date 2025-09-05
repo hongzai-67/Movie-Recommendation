@@ -121,6 +121,15 @@ class IMDBContentBasedRecommendationSystem:
         else:
             return "🔴 VERY LOW"
 
+    def _safe_val(self, ser, key):
+        """Helper: returns value or None (not NaN/None-string)."""
+        if key in ser.index:
+            v = ser[key]
+            if pd.isna(v):
+                return None
+            return v
+        return None
+
     def display_centralized_results(self, results_df, search_type="Search", original_query="", n=10):
         """
         Build a text block that matches the centralized CLI-like output in again.txt / your Colab sample.
@@ -144,84 +153,92 @@ class IMDBContentBasedRecommendationSystem:
         lines.append("-" * 80)
 
         for i, (_, movie) in enumerate(display_results.iterrows()):
-            # Title line
+            # safe name (avoid None)
+            name = self._safe_val(movie, 'names') or self._safe_val(movie, 'original_title') or ""
             if i == 0 and search_type.endswith("Recommendations"):
-                lines.append(f"🏆 {i+1}. {movie.get('names', movie.get('original_title',''))[:60]} ⭐ TOP MATCH!")
+                lines.append(f"🏆 {i+1}. {name[:60]} ⭐ TOP MATCH!")
             else:
-                lines.append(f"🎬 {i+1}. {movie.get('names', movie.get('original_title',''))[:60]}")
+                lines.append(f"🎬 {i+1}. {name[:60]}")
 
-            # Year
-            try:
-                if 'date_x' in movie.index:
-                    movie_year = pd.to_datetime(movie['date_x'], errors='coerce')
-                    if pd.notna(movie_year):
-                        lines.append(f"📅 Year: {movie_year.year} ", end='') if False else None
-            except:
-                pass
-
-            # Build info line (Year + Rating)
+            # Year + Rating (build only if present)
             info_parts = []
-            try:
-                if 'date_x' in movie.index:
-                    movie_year = pd.to_datetime(movie['date_x'], errors='coerce')
+            date_x = self._safe_val(movie, 'date_x')
+            if date_x is not None:
+                try:
+                    movie_year = pd.to_datetime(date_x, errors='coerce')
                     if pd.notna(movie_year):
                         info_parts.append(f"📅 Year: {movie_year.year}")
-                    else:
-                        info_parts.append("📅 Year: Unknown")
-                else:
-                    info_parts.append("📅 Year: Unknown")
-            except:
-                info_parts.append("📅 Year: Unknown")
+                except:
+                    pass
 
+            rating_val = None
             if 'weighted_rating' in movie.index:
-                info_parts.append(f"⭐ Rating: {movie['weighted_rating']:.2f}")
-            elif 'score' in movie.index and not pd.isna(movie['score']):
-                info_parts.append(f"⭐ Rating: {movie['score']:.2f}")
+                rating_val = movie.get('weighted_rating')
+            elif 'score' in movie.index:
+                rating_val = movie.get('score')
+            if rating_val is not None and not pd.isna(rating_val):
+                try:
+                    info_parts.append(f"⭐ Rating: {float(rating_val):.2f}")
+                except:
+                    pass
 
-            lines.append(" ".join(info_parts))
+            if info_parts:
+                lines.append(" ".join(info_parts))
 
             # Genre
-            if 'genre' in movie.index:
-                genre_display = str(movie['genre'])
+            genre_display = self._safe_val(movie, 'genre')
+            if genre_display:
                 lines.append(f"🎭 Genre: {genre_display}")
 
-            # Crew
-            if 'crew' in movie.index:
-                crew_display = str(movie['crew'])
-                if len(crew_display) > 120:
-                    crew_display = crew_display[:117] + "..."
-                lines.append(f"👥 Crew: {crew_display}")
+            # Crew (truncate if long)
+            crew_display = self._safe_val(movie, 'crew')
+            if crew_display:
+                crew_str = str(crew_display)
+                if len(crew_str) > 120:
+                    crew_str = crew_str[:117] + "..."
+                lines.append(f"👥 Crew: {crew_str}")
 
             # Language
-            if 'orig_lang' in movie.index and pd.notna(movie['orig_lang']):
-                lines.append(f"🗣️ Language:  {movie['orig_lang']}")
+            lang = self._safe_val(movie, 'orig_lang')
+            if lang:
+                lines.append(f"🗣️ Language:  {lang}")
 
             # Country
-            if 'country' in movie.index and pd.notna(movie['country']):
-                lines.append(f"🌍 Country: {movie['country']}")
+            country = self._safe_val(movie, 'country')
+            if country:
+                lines.append(f"🌍 Country: {country}")
 
             # Budget & Revenue
+            budget = self._safe_val(movie, 'budget_x')
             try:
-                if 'budget_x' in movie.index and pd.notna(movie['budget_x']) and float(movie['budget_x']) > 0:
-                    lines.append(f"💰 Budget: ${float(movie['budget_x']):,.1f}")
+                if budget is not None and float(budget) > 0:
+                    lines.append(f"💰 Budget: ${float(budget):,.1f}")
             except:
                 pass
+            revenue = self._safe_val(movie, 'revenue')
             try:
-                if 'revenue' in movie.index and pd.notna(movie['revenue']) and float(movie['revenue']) > 0:
-                    lines.append(f"💵 Revenue: ${float(movie['revenue']):,.1f}")
+                if revenue is not None and float(revenue) > 0:
+                    lines.append(f"💵 Revenue: ${float(revenue):,.1f}")
             except:
                 pass
 
             # Similarity (for content/hybrid)
-            if 'similarity' in movie.index:
-                sim = movie['similarity']
-                lines.append(f"🎯 Similarity: {sim:.4f} ({sim*100:.1f}%) - {self.get_similarity_level(sim)}")
+            sim = self._safe_val(movie, 'similarity')
+            if sim is not None and not pd.isna(sim):
+                try:
+                    simf = float(sim)
+                    lines.append(f"🎯 Similarity: {simf:.4f} ({simf*100:.1f}%) - {self.get_similarity_level(simf)}")
+                except:
+                    pass
 
-            if 'hybrid_score' in movie.index:
-                hs = movie['hybrid_score']
-                lines.append(f"🔀 Hybrid Score: {hs:.4f}")
+            # Hybrid score
+            hs = self._safe_val(movie, 'hybrid_score')
+            if hs is not None and not pd.isna(hs):
+                try:
+                    lines.append(f"🔀 Hybrid Score: {float(hs):.4f}")
+                except:
+                    pass
 
-            # empty line between entries
             lines.append("")
 
         lines.append("="*80)
@@ -390,14 +407,14 @@ class IMDBContentBasedRecommendationSystem:
 
         return results
 
-
 # ---------------------------
 # Streamlit App (keeps again.txt UI & output style)
 # ---------------------------
 def main():
     st.set_page_config(page_title="ENHANCED IMDB RECOMMENDER", layout="wide")
-    # Top header matching your Colab output styling
-    st.markdown("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
+    # Use title() so it appears as page title
+    st.title("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
+
     st.markdown("=================================================================")
     st.markdown("✨ CENTRALIZED RESULTS: All searches now show comprehensive movie information!")
     st.markdown("📊 Displays: Name, Year, Rating, Genre, Crew, Language, Country, Similarity")
@@ -548,7 +565,7 @@ def main():
         alpha = st.slider("⚖️ Alpha for hybrid (0-1)", 0.0, 1.0, 0.7, step=0.05)
         n_recs = st.slider("📊 Number of recommendations", 1, 20, 10)
 
-        if st.button("Get Hybrid Recommendations"):
+        if st.button("Get Hybrid Recs"):
             st.session_state.pop('choices_hybrid', None)
             st.session_state.pop('confirmed_hybrid', None)
             cleaned = recommender.clean_title_text(title)
@@ -625,3 +642,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
