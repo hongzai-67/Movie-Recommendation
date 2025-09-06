@@ -416,8 +416,6 @@ def main():
     st.set_page_config(page_title="ENHANCED IMDB RECOMMENDER", layout="wide")
     # Use title() so it appears as page title
     st.title("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
-
-    st.markdown("=================================================================")
     st.markdown("✨ CENTRALIZED RESULTS: All searches now show comprehensive movie information!")
     st.markdown("📊 Displays: Name, Year, Rating, Genre, Crew, Language, Country, Similarity")
     st.write("")
@@ -426,7 +424,6 @@ def main():
     local_joblib_path = "recommender.joblib"
     recommender = None
     if os.path.exists(local_joblib_path):
-        st.sidebar.success(f"Found bundled model: {local_joblib_path}")
         try:
             recommender = joblib.load(local_joblib_path)
         except Exception as e:
@@ -636,6 +633,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
