@@ -454,8 +454,7 @@ def main():
         "5️⃣ Search by Country (Movies from specific country)",
         "6️⃣ Search by Language (Movies in specific language)",
         "7️⃣ Top Rated Movies (Highest rated films)",
-        "8️⃣ Hybrid Recommendations (Content + Popularity)",
-        "9️⃣ Run Evaluation Suite (Precision/Recall & RMSE)",
+        "8️⃣ Run Evaluation Suite (Precision/Recall & RMSE)",
     ])
 
     # ----------------- 1. Title (content-based) -----------------
@@ -553,43 +552,8 @@ def main():
             formatted = recommender.display_centralized_results(res, "Top Rated Movies", f"Top {n_results} Movies", n=n_results)
             st.code(formatted, language="text")
 
-    # ----------------- 8. Hybrid Recommendations -----------------
+    # ----------------- 8. Run Evaluation Suite -----------------
     elif option.startswith("8️⃣"):
-        st.subheader("Hybrid Recommendations (Content + Popularity)")
-        title = st.text_input("🎬 Enter a movie title:")
-        alpha = st.slider("⚖️ Alpha for hybrid (0-1)", 0.0, 1.0, 0.7, step=0.05)
-        n_recs = st.slider("📊 Number of recommendations", 1, 20, 10)
-
-        if st.button("Get Hybrid Recs"):
-            st.session_state.pop('choices_hybrid', None)
-            st.session_state.pop('confirmed_hybrid', None)
-            cleaned = recommender.clean_title_text(title)
-            status, movie_info, recs = recommender.get_hybrid_recommendations(cleaned, n=n_recs, alpha=alpha)
-            if status is None:
-                st.error("❌ No matches found.")
-            elif status == "choose":
-                choices = movie_info['names'].tolist() if 'names' in movie_info else movie_info['original_title'].tolist()
-                st.session_state['choices_hybrid'] = choices
-            elif status == "ok":
-                formatted = recommender.display_centralized_results(recs, "Hybrid Recommendations", movie_info.get('names', ''), n_recs)
-                st.code(formatted, language="text")
-
-        if 'choices_hybrid' in st.session_state:
-            st.markdown("🔍 Did you mean one of these?")
-            choice = st.selectbox("🎯 Select a movie:", st.session_state['choices_hybrid'], key="choose_hybrid_select")
-            if st.button("Confirm Selection (Hybrid)"):
-                st.session_state['confirmed_hybrid'] = choice
-                del st.session_state['choices_hybrid']
-
-        if 'confirmed_hybrid' in st.session_state:
-            cleaned_choice = recommender.clean_title_text(st.session_state['confirmed_hybrid'])
-            status2, movie_info2, recs2 = recommender.get_hybrid_recommendations(cleaned_choice, n=n_recs, alpha=alpha)
-            if status2 == "ok":
-                formatted = recommender.display_centralized_results(recs2, "Hybrid Recommendations", movie_info2.get('names', ''), n_recs)
-                st.code(formatted, language="text")
-
-    # ----------------- 9. Run Evaluation Suite -----------------
-    elif option.startswith("9️⃣"):
         st.subheader("Run Evaluation Suite (Precision/Recall & RMSE)")
         k = st.slider("k (top-k)", 1, 30, 10)
         sample_size = st.slider("Sample size (for speed)", 10, 500, 50, step=10)
@@ -633,6 +597,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
