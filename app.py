@@ -421,10 +421,7 @@ def main():
     st.markdown("✨ CENTRALIZED RESULTS: All searches now show comprehensive movie information!")
     st.markdown("📊 Displays: Name, Year, Rating, Genre, Crew, Language, Country, Similarity")
     st.write("")
-
-    # ---------------- Sidebar upload / reset ----------------
-    uploaded_file = st.sidebar.file_uploader("Upload IMDB dataset (CSV)", type="csv")
-
+    
     # Try to load bundled joblib first (minimal addition)
     local_joblib_path = "recommender.joblib"
     recommender = None
@@ -435,15 +432,6 @@ def main():
         except Exception as e:
             st.sidebar.error(f"Failed to load bundled model: {e}")
             recommender = None
-
-    if st.sidebar.button("🔄 Reset All Records"):
-        for k in list(st.session_state.keys()):
-            if k.startswith("choices_") or k.startswith("confirmed_") or k in ("last_query",):
-                try:
-                    del st.session_state[k]
-                except:
-                    pass
-        st.experimental_rerun()
 
     # If no bundled recommender, fall back to uploaded CSV
     if recommender is None:
@@ -471,7 +459,6 @@ def main():
         "7️⃣ Top Rated Movies (Highest rated films)",
         "8️⃣ Hybrid Recommendations (Content + Popularity)",
         "9️⃣ Run Evaluation Suite (Precision/Recall & RMSE)",
-        "🔟 Exit"
     ])
 
     # ----------------- 1. Title (content-based) -----------------
@@ -647,11 +634,8 @@ def main():
             except Exception as e:
                 st.error(f"Evaluation failed: {e}")
 
-    # ----------------- Exit -----------------
-    elif option.startswith("🔟"):
-        st.write("Exiting — close the browser tab or choose another option.")
-
 if __name__ == "__main__":
     main()
+
 
 
