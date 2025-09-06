@@ -6,6 +6,8 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from math import sqrt
+import joblib
+import os
 
 # ---------------------------
 # Recommendation System Class
@@ -642,3 +644,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
