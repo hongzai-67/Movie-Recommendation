@@ -454,7 +454,6 @@ def main():
         "5️⃣ Search by Country (Movies from specific country)",
         "6️⃣ Search by Language (Movies in specific language)",
         "7️⃣ Top Rated Movies (Highest rated films)",
-        "8️⃣ Run Evaluation Suite (Precision/Recall & RMSE)",
     ])
 
     # ----------------- 1. Title (content-based) -----------------
@@ -552,51 +551,9 @@ def main():
             formatted = recommender.display_centralized_results(res, "Top Rated Movies", f"Top {n_results} Movies", n=n_results)
             st.code(formatted, language="text")
 
-    # ----------------- 8. Run Evaluation Suite -----------------
-    elif option.startswith("8️⃣"):
-        st.subheader("Run Evaluation Suite (Precision/Recall & RMSE)")
-        k = st.slider("k (top-k)", 1, 30, 10)
-        sample_size = st.slider("Sample size (for speed)", 10, 500, 50, step=10)
-        if st.button("Run Evaluation Suite"):
-            prog = st.progress(0)
-            status_txt = st.empty()
-
-            def progress_cb(percent, message):
-                prog.progress(percent)
-                status_txt.info(message)
-
-            try:
-                status_txt.info("Starting evaluations...")
-                results = recommender.run_all_evaluations(k=k, sample_size=sample_size, progress_callback=progress_cb)
-                prog.empty()
-                status_txt.success("Evaluations completed.")
-                # Format output similar to your Colab example
-                header = []
-                header.append("🧪 RUNNING EVALUATIONS")
-                header.append("="*30)
-                st.code("\n".join(header), language="text")
-
-                # show PRF
-                prf_lines = []
-                prf_lines.append(f"📏 EVALUATION (CONTENT): ")
-                prf_lines.append(f"🎯 Precision (k={k}): {results.get('precision',0):.3f} ")
-                prf_lines.append(f"📚 Recall (k={k}): {results.get('recall',0):.3f} ")
-                prf_lines.append(f"⚖️ F1: {results.get('f1',0):.3f} ")
-                st.code("\n".join(prf_lines), language="text")
-
-                # RMSE (may be None)
-                if 'mse' in results:
-                    rmse_lines = []
-                    rmse_lines.append("\n📉 Rating Prediction: ")
-                    rmse_lines.append(f"📊 MSE: {results.get('mse'):.4f}" if results.get('mse') is not None else "📊 MSE: N/A")
-                    rmse_lines.append(f"🔮 RMSE: {results.get('rmse'):.4f}" if results.get('rmse') is not None else "🔮 RMSE: N/A")
-                    rmse_lines.append(f"⚡ (k={k})")
-                    st.code("\n".join(rmse_lines), language="text")
-            except Exception as e:
-                st.error(f"Evaluation failed: {e}")
-
 if __name__ == "__main__":
     main()
+
 
 
 
