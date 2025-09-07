@@ -322,9 +322,9 @@ class IMDBContentBasedRecommendationSystem:
 # Streamlit App 
 # ---------------------------
 def main():
-    st.set_page_config(page_title="ENHANCED IMDB RECOMMENDER", layout="wide")
+    st.set_page_config(page_title="Movie Recommend System", layout="wide")
     # Use title() so it appears as page title
-    st.title("🎮 ENHANCED INTERACTIVE MOVIE RECOMMENDATION SYSTEM")
+    st.title("MOVIE RECOMMENDATION SYSTEM")
     st.markdown("✨ CENTRALIZED RESULTS: All searches now show comprehensive movie information!")
     st.markdown("📊 Displays: Name, Year, Rating, Genre, Crew, Language, Country, Similarity")
     st.write("")
@@ -462,6 +462,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
