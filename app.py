@@ -247,7 +247,7 @@ class IMDBContentBasedRecommendationSystem:
         return "\n".join(lines)
 
     # ---------------------------
-    # Search & Recommendation Methods (kept like again.txt)
+    # Search & Recommendation Methods
     # ---------------------------
     def get_content_recommendations(self, title, n=10):
         if self.indices is None:
@@ -318,99 +318,8 @@ class IMDBContentBasedRecommendationSystem:
         ]
         return matches.nlargest(n, 'weighted_rating')
 
-    # ---------------------------
-    # Hybrid & Evaluation (from newcode.txt)
-    # ---------------------------
-    def get_hybrid_recommendations(self, title, n=10, alpha=0.7):
-        # ensure popularity_norm
-        if 'popularity_norm' not in self.qualified_movies.columns:
-            ratings = self.qualified_movies['weighted_rating'].fillna(self.average_rating)
-            min_r, max_r = ratings.min(), ratings.max()
-            denom = (max_r - min_r) if max_r != min_r else 1.0
-            self.qualified_movies['popularity_norm'] = (ratings - min_r) / denom
-
-        if title not in self.indices:
-            possible = self.qualified_movies[self.qualified_movies['orig_title'].str.contains(title, case=False, na=False)]
-            if possible.empty:
-                return None, None, None
-            return "choose", possible.head(8), None
-
-        idx = self.indices[title]
-        if hasattr(idx, '__iter__') and not isinstance(idx, str):
-            idx = idx.iloc[0] if hasattr(idx, 'iloc') else idx[0]
-
-        sim_scores = list(enumerate(self.cosine_sim[idx]))
-        sim_scores = [(i, s) for i, s in sim_scores if i != idx]
-
-        candidate_indices = [i for i, _ in sim_scores]
-        candidates_df = self.qualified_movies.iloc[candidate_indices].copy()
-        candidates_df['similarity'] = [s for _, s in sim_scores]
-
-        candidates_df['hybrid_score'] = alpha * candidates_df['similarity'] + (1 - alpha) * candidates_df['popularity_norm']
-
-        recommendations = candidates_df.sort_values('hybrid_score', ascending=False).head(n)
-        return "ok", self.qualified_movies.loc[idx], recommendations
-
-    def run_all_evaluations(self, k=10, sample_size=50, progress_callback=None):
-        results = {}
-        titles = self.qualified_movies['orig_title'].tolist()[:sample_size]
-        precisions, recalls = [], []
-
-        for i, title in enumerate(titles):
-            status, _, recs = self.get_content_recommendations(title, n=k)
-            if recs is None or recs.empty:
-                continue
-            src = self.qualified_movies[self.qualified_movies['orig_title'] == title]
-            src_genres = set(str(src.iloc[0]['genre']).split('|'))
-            relevant_mask = self.qualified_movies['genre'].apply(
-                lambda g: len(src_genres.intersection(set(str(g).split('|')))) > 0
-            )
-            relevant_indices = set(self.qualified_movies[relevant_mask].index) - set(src.index)
-            rec_indices = set(recs.index)
-            tp = len(rec_indices & relevant_indices)
-            precisions.append(tp / max(1, len(rec_indices)))
-            recalls.append(tp / max(1, len(relevant_indices)))
-
-            if progress_callback:
-                progress_callback(int((i + 1) / len(titles) * 50), "Evaluating Precision/Recall/F1...")
-
-        precision = float(np.mean(precisions)) if precisions else 0.0
-        recall = float(np.mean(recalls)) if recalls else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        results.update({'precision': precision, 'recall': recall, 'f1': f1})
-
-        # Rating prediction RMSE
-        y_true, y_pred = [], []
-        n_samples = min(sample_size, len(self.qualified_movies))
-        for idx in range(n_samples):
-            sims = list(enumerate(self.cosine_sim[idx]))
-            sims = [(i, s) for i, s in sims if i != idx]
-            sims = sorted(sims, key=lambda x: x[1], reverse=True)[:k]
-            if not sims:
-                continue
-            neighbor_idx = [i for i, _ in sims]
-            weights = np.array([s for _, s in sims], dtype=float)
-            neighbor_ratings = self.qualified_movies.iloc[neighbor_idx]['weighted_rating'].fillna(self.average_rating).values
-            w_sum = weights.sum()
-            pred = float((weights @ neighbor_ratings) / w_sum) if w_sum > 0 else float(np.mean(neighbor_ratings))
-            y_true.append(float(self.qualified_movies.iloc[idx]['weighted_rating']))
-            y_pred.append(pred)
-
-            if progress_callback:
-                progress_callback(50 + int((idx + 1) / n_samples * 50), "Evaluating RMSE...")
-
-        if y_true:
-            errors = np.array(y_true) - np.array(y_pred)
-            mse = float(np.mean(errors ** 2))
-            rmse = float(sqrt(mse))
-            results.update({'mse': mse, 'rmse': rmse})
-        else:
-            results.update({'mse': None, 'rmse': None})
-
-        return results
-
 # ---------------------------
-# Streamlit App (keeps again.txt UI & output style)
+# Streamlit App 
 # ---------------------------
 def main():
     st.set_page_config(page_title="ENHANCED IMDB RECOMMENDER", layout="wide")
@@ -553,6 +462,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
